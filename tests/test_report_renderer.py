@@ -50,6 +50,42 @@ def test_render_report_escapes_script_closing_tag_in_display_names():
     assert "<\\/script>" in html
 
 
+def test_template_escapes_dynamic_html_injection_sites():
+    # A Graph-sourced displayName containing an HTML injection payload that
+    # does NOT contain the literal substring "</script>" would sail past the
+    # script-closing-tag escaping done in report_renderer.py, but would still
+    # execute as real markup if the client-side JS assigns it into innerHTML
+    # unescaped. The template must run every such value through an escaping
+    # helper before it reaches innerHTML.
+    payload = "<img src=x onerror=alert(1)>"
+    tricky_users = [{"id": "u1", "displayName": payload, "userPrincipalName": "alice@contoso.com"}]
+    matrix_result = aggregate_user_policy_matrix(tricky_users, POLICIES, {}, {})
+    html = render_report(matrix_result, tricky_users, POLICIES,
+                          {"total_signins": 0, "requested_days": 30},
+                          TEMPLATE_PATH)
+    # The raw payload must not appear literally in the rendered output at all
+    # (it only ever appears JSON-encoded inside REPORT_DATA, never as bare
+    # markup in the surrounding HTML/JS source).
+    assert html.count(payload) <= 1  # at most the one JSON-encoded occurrence
+
+    with open(TEMPLATE_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
+
+    assert "function escapeHtml(" in template
+
+    # showDrillDown must escape every dynamic field it interpolates into HTML
+    assert "escapeHtml(user.displayName)" in template
+    assert "escapeHtml(policy.displayName)" in template
+    assert "escapeHtml(cell.reason)" in template
+    assert "escapeHtml(e.timestamp)" in template
+    assert "escapeHtml(e.app)" in template
+    assert "escapeHtml(e.location)" in template
+    assert "escapeHtml(e.result_bucket)" in template
+
+    # The per-policy chart heading must also escape the policy display name.
+    assert "<h3>${escapeHtml(policy.displayName)}</h3>" in template
+
+
 def test_write_report_writes_html_to_disk():
     with tempfile.TemporaryDirectory() as tmp_dir:
         output_path = os.path.join(tmp_dir, "report.html")

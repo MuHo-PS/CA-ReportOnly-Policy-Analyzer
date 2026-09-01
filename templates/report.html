@@ -39,6 +39,12 @@
 <script>
   const REPORT_DATA = __REPORT_DATA__;
 
+  function escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = str == null ? "" : String(str);
+    return div.innerHTML;
+  }
+
   function renderSummaryCards() {
     const container = document.getElementById("summary-cards");
     const cards = [
@@ -105,12 +111,12 @@
   function showDrillDown(user, policy, cell) {
     const el = document.getElementById("drill-down");
     if (cell.not_collected) {
-      el.innerHTML = `<strong>${user.displayName} / ${policy.displayName}</strong>: not collected — ${cell.reason}`;
+      el.innerHTML = `<strong>${escapeHtml(user.displayName)} / ${escapeHtml(policy.displayName)}</strong>: not collected — ${escapeHtml(cell.reason)}`;
     } else {
       const rows = (cell.sample_events || []).map(e =>
-        `<tr><td>${e.timestamp}</td><td>${e.app}</td><td>${e.location}</td><td>${e.result_bucket}</td></tr>`
+        `<tr><td>${escapeHtml(e.timestamp)}</td><td>${escapeHtml(e.app)}</td><td>${escapeHtml(e.location)}</td><td>${escapeHtml(e.result_bucket)}</td></tr>`
       ).join("");
-      el.innerHTML = `<strong>${user.displayName} / ${policy.displayName}</strong> — sample events:
+      el.innerHTML = `<strong>${escapeHtml(user.displayName)} / ${escapeHtml(policy.displayName)}</strong> — sample events:
         <table><tr><th>Time</th><th>App</th><th>Location</th><th>Result</th></tr>${rows}</table>`;
     }
     el.style.display = "block";
@@ -122,7 +128,7 @@
       const totals = REPORT_DATA.policy_totals[policy.id];
       const total = Object.values(totals.counts).reduce((a, b) => a + b, 0) + totals.not_evaluated_count;
       const div = document.createElement("div");
-      div.innerHTML = `<h3>${policy.displayName}</h3>`;
+      div.innerHTML = `<h3>${escapeHtml(policy.displayName)}</h3>`;
       for (const [bucket, count] of Object.entries(totals.counts)) {
         const width = total > 0 ? Math.round((count / total) * 300) : 0;
         div.innerHTML += `<div>${bucket}: <span class="bar" style="width:${width}px"></span> ${count}</div>`;
