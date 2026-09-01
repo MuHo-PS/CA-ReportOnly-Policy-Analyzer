@@ -12,7 +12,7 @@
     the output traces back to a real Graph API evaluation result.
 #>
 
-Set-StrictMode -Version Latest
+Set-StrictMode -Version 1.0
 $ProgressPreference = "SilentlyContinue"
 
 # ===========================================================================
