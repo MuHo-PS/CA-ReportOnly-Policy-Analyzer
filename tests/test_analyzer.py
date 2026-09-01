@@ -2,6 +2,7 @@ import os
 import tempfile
 from unittest.mock import MagicMock, patch
 
+import analyzer
 from analyzer import run_pipeline
 
 CA_POLICIES = [
@@ -38,7 +39,10 @@ def test_run_pipeline_produces_report_with_disabled_policies_excluded(
 
     with tempfile.TemporaryDirectory() as tmp_dir:
         output_path = os.path.join(tmp_dir, "report.html")
-        result_path = run_pipeline(mock_authenticator, mock_session, open_browser=False, output_path=output_path)
+        with patch("analyzer.webbrowser.open") as mock_browser_open:
+            result_path = run_pipeline(mock_authenticator, mock_session, open_browser=False, output_path=output_path)
+            # open_browser=False must never trigger opening the finished report.
+            assert mock_browser_open.called is False
 
         assert result_path == output_path
         assert os.path.exists(output_path)
@@ -50,6 +54,30 @@ def test_run_pipeline_produces_report_with_disabled_policies_excluded(
     # picker only ever sees non-disabled policies
     picker_policies = mock_selection_server.call_args.kwargs.get("policies") or mock_selection_server.call_args[0][2]
     assert all(p["state"] != "disabled" for p in picker_policies)
+
+
+@patch("analyzer.fetch_signins_all", return_value=[SIGNIN])
+@patch("analyzer.run_selection_server")
+@patch("analyzer.fetch_groups", return_value=GROUPS)
+@patch("analyzer.fetch_users", return_value=USERS)
+@patch("analyzer.fetch_ca_policies", return_value=CA_POLICIES)
+def test_run_pipeline_opens_browser_on_finished_report_when_requested(
+    mock_fetch_ca, mock_fetch_users, mock_fetch_groups, mock_selection_server, mock_fetch_signins
+):
+    mock_selection_server.return_value = {
+        "all_users": True, "user_ids": [], "group_ids": [], "policy_ids": ["p1"], "days": 30,
+    }
+    mock_authenticator = MagicMock()
+    mock_authenticator.acquire_token.return_value = "fake-token"
+    mock_session = MagicMock()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        output_path = os.path.join(tmp_dir, "report.html")
+        with patch("analyzer.webbrowser.open") as mock_browser_open:
+            result_path = run_pipeline(mock_authenticator, mock_session, open_browser=True, output_path=output_path)
+            assert mock_browser_open.called is True
+            (opened_url,), _ = mock_browser_open.call_args
+            assert result_path in opened_url or opened_url.endswith(os.path.basename(output_path))
 
 
 @patch("analyzer.run_selection_server")

@@ -1,7 +1,9 @@
 """Entry point: wires auth, discovery, the selection server, sign-in
 collection, aggregation, and report rendering together.
 """
+import os
 import sys
+import webbrowser
 from datetime import datetime, timedelta, timezone
 
 import requests
@@ -81,6 +83,8 @@ def run_pipeline(authenticator, session, open_browser: bool = True,
 
     html = render_report(matrix_result, scoped_users, report_policies, meta, REPORT_TEMPLATE)
     write_report(html, output_path)
+    if open_browser:
+        webbrowser.open(f"file://{os.path.abspath(output_path)}")
     return output_path
 
 
