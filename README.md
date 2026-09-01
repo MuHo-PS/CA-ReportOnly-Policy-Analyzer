@@ -57,11 +57,17 @@ every Windows machine has built in by default.
 .\tests\test-aggregate.ps1
 .\tests\test-html.ps1
 .\tests\test-server.ps1
+.\tests\test-pagination.ps1
+.\tests\test-report-browser.ps1
 ```
 
-45 tests total, run against real Windows PowerShell (not mocked) — the
-aggregation logic, HTML/JSON generation and escaping, and the real transient
-HTTP selection server's GET/POST round trip.
+57 tests total, run against real Windows PowerShell (not mocked) — the
+aggregation logic, HTML/JSON generation and escaping, the real transient HTTP
+selection server's GET/POST round trip, Graph pagination (single-page and
+multi-page), and `test-report-browser.ps1`, which actually loads the
+generated report into headless Microsoft Edge and inspects the real rendered
+DOM rather than just checking the JS source text — skips gracefully if Edge
+isn't installed.
 
 ## Required permissions
 
@@ -159,3 +165,23 @@ codebase:**
   responses and asserts the exact call count, with a safety-valve abort if
   more than 5 calls happen, so a regression here fails a test instead of
   hanging in front of a customer again.
+- **A render function can be written correctly, added to the script, and
+  still never run — because nobody added the call to it.** When the report
+  was redesigned to lead with per-policy verdicts instead of the raw matrix,
+  `renderHeadline()` and `renderPolicyVerdicts()` were written and correct
+  but never added to the invocation list at the bottom of the `<script>`
+  block. Every existing test still passed, because they only checked that
+  certain strings existed in the JS *source* — none of them actually ran the
+  page. This is why `tests/test-report-browser.ps1` exists: it loads the
+  generated report into real headless Microsoft Edge (`msedge.exe
+  --headless=new --dump-dom`) and inspects the actual rendered DOM, which is
+  the only way this class of bug reliably gets caught. One more gotcha found
+  building that test: piping a native process's output through PowerShell's
+  `&` call operator (`& $edge ... | Out-File ...`) silently produced an empty
+  capture in this environment — `Start-Process -RedirectStandardOutput`
+  worked reliably where the pipe form didn't.
+- **The report's visual design borrows the real GBG palette** (green
+  `#4FAE7E`, red `#C81E2C`, amber `#E8954A`, blue `#4A90C8` accent, Inter
+  font) from the main GBG Assessment Tool's own report CSS, rather than an
+  invented palette — consistency across the tool family, not a new visual
+  language per report.

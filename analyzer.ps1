@@ -805,24 +805,34 @@ function Start-SelectionServer {
 
 $Script:ReportPageStyle = @'
 <style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
   :root {
     --bg: #f7f8fa; --card: #ffffff; --border: #e3e6ea;
     --text: #1c2128; --text-muted: #5b6572;
-    --accent: #2f6fed; --accent-soft: #eaf1fe;
-    --ok: #1a7f4b; --ok-soft: #e6f6ee;
-    --bad: #c4342f; --bad-soft: #fbeaea;
-    --warn: #b5760a; --warn-soft: #fdf3e3;
-    --neutral: #6b7280; --neutral-soft: #eef0f2;
+    --accent: #4A90C8; --accent-soft: rgba(74,144,200,0.08);
+    /* Real GBG palette, matched from the main assessment tool's own report
+       CSS -- consistency across the tool family beats a bespoke palette. */
+    --ok: #4FAE7E; --ok-soft: rgba(79,174,126,0.12); --ok-border: rgba(79,174,126,0.35);
+    --bad: #C81E2C; --bad-soft: rgba(200,30,44,0.12); --bad-border: rgba(200,30,44,0.35);
+    --warn: #E8954A; --warn-soft: rgba(232,149,74,0.12); --warn-border: rgba(232,149,74,0.35);
+    --neutral: #6b7280; --neutral-soft: #eef0f2; --neutral-border: #d7dbe0;
   }
   * { box-sizing: border-box; }
   body {
-    font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    font-family: 'Inter', -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     background: var(--bg); color: var(--text);
     margin: 0; padding: 2.5rem 1.5rem 4rem;
   }
   .page { max-width: 1100px; margin: 0 auto; }
-  h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 1.5rem; letter-spacing: -0.01em; }
-  h2 { font-size: 1.15rem; font-weight: 700; margin: 2rem 0 0.9rem; }
+  h1 { font-size: 1.75rem; font-weight: 700; margin: 0 0 0.6rem; letter-spacing: -0.01em; }
+  h2 {
+    font-size: 1.05rem; font-weight: 700; margin: 2rem 0 0.9rem;
+    padding: 0.5rem 0.85rem; border-left: 4px solid var(--accent);
+    background: var(--accent-soft); border-radius: 0 6px 6px 0;
+  }
+  h3 { font-size: 1rem; font-weight: 700; margin: 1.5rem 0 0.75rem; }
+  .headline { font-size: 1.05rem; color: var(--text-muted); margin: 0 0 1.5rem; max-width: 760px; }
+  .headline strong { color: var(--text); }
   .cards { display: flex; gap: 0.9rem; flex-wrap: wrap; margin-bottom: 0.5rem; }
   .stat-card {
     background: var(--card); border: 1px solid var(--border); border-radius: 12px;
@@ -832,9 +842,50 @@ $Script:ReportPageStyle = @'
   .stat-card .label { font-size: 0.78rem; color: var(--text-muted); margin-bottom: 0.25rem; }
   .stat-card .value { font-size: 1.5rem; font-weight: 700; }
   .stat-card.warn .value { color: var(--warn); }
+
+  /* Policy verdict cards -- the primary view */
+  .verdict-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1rem 1.25rem; margin-bottom: 0.75rem;
+    box-shadow: 0 1px 2px rgba(16,24,40,0.04);
+  }
+  .verdict-card-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; cursor: pointer; }
+  .verdict-policy-name { font-weight: 600; font-size: 0.95rem; }
+  .verdict-badge {
+    display: inline-flex; align-items: center; gap: 0.4rem;
+    padding: 0.3rem 0.7rem; border-radius: 999px; font-size: 0.78rem; font-weight: 600;
+    white-space: nowrap; border: 1px solid transparent;
+  }
+  .verdict-badge .dot { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; }
+  .verdict-affect  { background: var(--bad-soft);  color: var(--bad);  border-color: var(--bad-border); }
+  .verdict-affect  .dot { background: var(--bad); }
+  .verdict-unknown { background: var(--warn-soft); color: var(--warn); border-color: var(--warn-border); }
+  .verdict-unknown .dot { background: var(--warn); }
+  .verdict-none    { background: var(--neutral-soft); color: var(--neutral); border-color: var(--neutral-border); }
+  .verdict-none    .dot { background: var(--neutral); }
+  .verdict-ready   { background: var(--ok-soft);   color: var(--ok);   border-color: var(--ok-border); }
+  .verdict-ready   .dot { background: var(--ok); }
+  .verdict-detail { display: none; margin-top: 0.9rem; padding-top: 0.9rem; border-top: 1px solid var(--border); font-size: 0.85rem; }
+  .verdict-detail.open { display: block; }
+  .affected-user-row {
+    display: flex; justify-content: space-between; padding: 0.4rem 0; border-bottom: 1px solid var(--border);
+    cursor: pointer;
+  }
+  .affected-user-row:last-child { border-bottom: none; }
+  .affected-user-row:hover { color: var(--accent); }
+  .verdict-note { color: var(--text-muted); font-size: 0.82rem; margin-top: 0.5rem; }
+
+  details.detail-toggle {
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    padding: 1rem 1.25rem; margin-top: 1.5rem;
+  }
+  details.detail-toggle summary { cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+  details.detail-toggle[open] summary { margin-bottom: 1rem; }
+
   table { border-collapse: collapse; width: 100%; background: var(--card); border-radius: 12px; overflow: hidden; }
   th, td { border: 1px solid var(--border); padding: 0.6rem 0.8rem; text-align: left; font-size: 0.85rem; vertical-align: top; }
   th { background: var(--neutral-soft); font-weight: 600; }
+  tbody tr:hover td, tr:hover td { background: var(--accent-soft); }
   td.cell-would-apply { background: var(--ok-soft); }
   td.cell-would-not-apply { background: var(--bad-soft); }
   td.cell-mixed { background: var(--warn-soft); }
@@ -901,14 +952,21 @@ __REPORT_STYLE__
 <body>
 <div class="page">
   <h1>CA Report-Only Policy Analyzer -- Report</h1>
+  <p class="headline" id="headline-sentence"></p>
   <div class="cards" id="summary-cards"></div>
 
-  <h2>User &times; Policy Matrix</h2>
-  <table id="matrix-table"></table>
-  <div id="drill-down"></div>
+  <h2>Report-Only Policies</h2>
+  <div id="policy-verdicts"></div>
 
-  <h2>Per-Policy Result Distribution</h2>
-  <div id="policy-charts"></div>
+  <details class="detail-toggle">
+    <summary>Show full user &times; policy matrix and per-policy result distribution</summary>
+    <h3>User &times; Policy Matrix</h3>
+    <table id="matrix-table"></table>
+    <div id="drill-down"></div>
+
+    <h3>Per-Policy Result Distribution</h3>
+    <div id="policy-charts"></div>
+  </details>
 
   <div class="caveats">
     <strong>Caveats</strong>
@@ -916,6 +974,7 @@ __REPORT_STYLE__
       <li>Results assume each policy's report-only/enforced mode was constant across the analyzed window -- Graph only exposes the current policy list, not its history.</li>
       <li>Interactive user sign-ins only; workload-identity/service-principal sign-ins are not included.</li>
       <li>"Not evaluated" means this policy's conditions (app, resource, risk level, scope, etc.) did not match that specific sign-in -- it is never the same thing as "would not apply to this user in general," and it is not evidence anything is broken.</li>
+      <li>"Zero impact" means none of the pulled sign-ins would have had a different outcome -- it does not mean the policy was checked against every possible scenario, only the sign-ins actually observed in this window.</li>
       <li>This tool does not independently verify whether the tenant's sign-in log retention actually covered the full requested day range.</li>
     </ul>
   </div>
@@ -954,6 +1013,126 @@ __REPORT_STYLE__
       div.className = "stat-card" + (isWarn ? " warn" : "");
       div.innerHTML = `<div class="label">${escapeHtml(label)}</div><div class="value">${escapeHtml(value)}</div>`;
       container.appendChild(div);
+    }
+  }
+
+  // A policy's verdict is about REAL-WORLD IMPACT, not raw evaluation
+  // counts: reportOnlySuccess/reportOnlyNotApplied mean "nothing would
+  // change if this were enforced" (the sign-in already met the bar, or the
+  // policy never targeted it). Only reportOnlyFailure/reportOnlyInterrupted
+  // (or their non-report-only equivalents, kept for robustness even though
+  // only report-only policies are ever analyzed) represent a sign-in that
+  // would have had a DIFFERENT outcome. unknownFutureValue is deliberately
+  // its own verdict rather than being silently folded into "ready" -- an
+  // unrecognized Graph result string is not evidence of zero impact.
+  const IMPACT_BUCKETS = ["reportOnlyFailure", "reportOnlyInterrupted", "failure"];
+
+  function sumBuckets(counts, buckets) {
+    return buckets.reduce((sum, b) => sum + (counts[b] || 0), 0);
+  }
+
+  function computeVerdict(totals) {
+    const counts = totals.counts || {};
+    const impact = sumBuckets(counts, IMPACT_BUCKETS);
+    const unknown = counts.unknownFutureValue || 0;
+    const totalEvaluated = Object.values(counts).reduce((a, b) => a + b, 0);
+
+    if (unknown > 0) return { key: "unknown", impact, unknown };
+    if (totalEvaluated === 0) return { key: "no-signal", impact: 0, unknown: 0 };
+    if (impact > 0) return { key: "would-affect", impact, unknown: 0 };
+    return { key: "ready", impact: 0, unknown: 0 };
+  }
+
+  const VERDICT_META = {
+    "would-affect": { label: "Would have affected real sign-ins", cls: "verdict-affect", order: 0 },
+    "unknown":      { label: "Unrecognized result -- needs manual review", cls: "verdict-unknown", order: 1 },
+    "no-signal":    { label: "No usable signal in this window", cls: "verdict-none", order: 2 },
+    "ready":        { label: "Zero impact -- ready to enforce", cls: "verdict-ready", order: 3 },
+  };
+
+  function findAffectedUsers(policyId) {
+    const affected = [];
+    for (const user of REPORT_DATA.users) {
+      const cell = REPORT_DATA.matrix[user.id][policyId];
+      if (cell.notCollected) continue;
+      const counts = cell.counts || {};
+      const impact = sumBuckets(counts, IMPACT_BUCKETS) + (counts.unknownFutureValue || 0);
+      if (impact > 0) affected.push({ user, cell, impact });
+    }
+    affected.sort((a, b) => b.impact - a.impact);
+    return affected;
+  }
+
+  function renderHeadline() {
+    const verdicts = REPORT_DATA.policies.map(p => computeVerdict(REPORT_DATA.policyTotals[p.id]).key);
+    const affectCount = verdicts.filter(v => v === "would-affect").length;
+    const readyCount = verdicts.filter(v => v === "ready").length;
+    const noSignalCount = verdicts.filter(v => v === "no-signal").length;
+    const unknownCount = verdicts.filter(v => v === "unknown").length;
+
+    const parts = [];
+    if (affectCount > 0) {
+      parts.push(`<strong>${affectCount}</strong> of ${REPORT_DATA.policies.length} report-only polic${affectCount === 1 ? "y" : "ies"} would have changed the outcome of at least one real sign-in`);
+    } else {
+      parts.push(`None of the ${REPORT_DATA.policies.length} report-only policies analyzed would have changed the outcome of any observed sign-in`);
+    }
+    const tail = [];
+    if (readyCount > 0) tail.push(`${readyCount} had zero impact`);
+    if (noSignalCount > 0) tail.push(`${noSignalCount} had no usable signal in this window`);
+    if (unknownCount > 0) tail.push(`${unknownCount} returned an unrecognized result and need manual review`);
+    const sentence = parts[0] + (tail.length ? "; " + tail.join(", ") + "." : ".");
+
+    document.getElementById("headline-sentence").innerHTML = sentence;
+  }
+
+  function toggleVerdictDetail(policyId) {
+    const el = document.getElementById("verdict-detail-" + policyId);
+    el.classList.toggle("open");
+  }
+
+  function renderPolicyVerdicts() {
+    const container = document.getElementById("policy-verdicts");
+    const rows = REPORT_DATA.policies.map(p => {
+      const totals = REPORT_DATA.policyTotals[p.id];
+      const verdict = computeVerdict(totals);
+      return { policy: p, totals, verdict };
+    });
+    rows.sort((a, b) => VERDICT_META[a.verdict.key].order - VERDICT_META[b.verdict.key].order);
+
+    for (const { policy, totals, verdict } of rows) {
+      const meta = VERDICT_META[verdict.key];
+      const card = document.createElement("div");
+      card.className = "verdict-card";
+
+      let countText = "";
+      if (verdict.key === "would-affect") countText = `${verdict.impact} sign-in${verdict.impact === 1 ? "" : "s"}`;
+      else if (verdict.key === "unknown") countText = `${verdict.unknown} unrecognized result${verdict.unknown === 1 ? "" : "s"}`;
+
+      card.innerHTML =
+        `<div class="verdict-card-head" onclick="toggleVerdictDetail('${policy.id}')">` +
+        `<div class="verdict-policy-name">${escapeHtml(policy.displayName)}</div>` +
+        `<div class="verdict-badge ${meta.cls}"><span class="dot"></span>${escapeHtml(meta.label)}${countText ? " (" + escapeHtml(countText) + ")" : ""}</div>` +
+        `</div>` +
+        `<div class="verdict-detail" id="verdict-detail-${policy.id}"></div>`;
+      container.appendChild(card);
+
+      const detailEl = card.querySelector(".verdict-detail");
+      if (verdict.key === "would-affect" || verdict.key === "unknown") {
+        const affected = findAffectedUsers(policy.id);
+        const rowsHtml = affected.map(a =>
+          `<div class="affected-user-row" onclick="showDrillDown(${JSON.stringify(a.user.id)}, ${JSON.stringify(policy.id)})">` +
+          `<span>${escapeHtml(a.user.displayName)}</span><span>${a.impact} sign-in${a.impact === 1 ? "" : "s"}</span></div>`
+        ).join("");
+        detailEl.innerHTML = `<div>Affected users (click for sample sign-ins):</div>${rowsHtml}`;
+      } else if (verdict.key === "no-signal") {
+        detailEl.innerHTML = `<div class="verdict-note">None of the ${REPORT_DATA.meta.totalSignIns} pulled sign-ins had any evaluation recorded for this policy -- it may target a scope (app, resource, identity type) this data never touched. Not evidence the policy is misconfigured.</div>`;
+      } else {
+        const totalEvaluated = Object.values(totals.counts || {}).reduce((a, b) => a + b, 0);
+        detailEl.innerHTML = `<div class="verdict-note">${totalEvaluated} sign-in${totalEvaluated === 1 ? "" : "s"} evaluated against this policy; none would have had a different outcome if it were enforced.</div>`;
+      }
+      if (totals.notCollectedUsers > 0) {
+        detailEl.innerHTML += `<div class="verdict-note">${totals.notCollectedUsers} user(s) could not be collected for this policy -- this verdict does not cover them.</div>`;
+      }
     }
   }
 
@@ -1040,6 +1219,8 @@ __REPORT_STYLE__
   }
 
   renderSummaryCards();
+  renderHeadline();
+  renderPolicyVerdicts();
   renderMatrix();
   renderPolicyCharts();
 </script>
