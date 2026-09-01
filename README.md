@@ -9,9 +9,20 @@ evaluation results — it never infers or simulates a policy's behavior.
 
 ## Usage
 
+**Windows (PowerShell) — one command:**
+
+```powershell
+.\run.ps1
+```
+
+Finds Python on your machine, installs the two required packages if they're not
+already present, and runs the tool. No venv, no manual pip step.
+
+**Manual (any OS):**
+
 ```bash
 python -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate   # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python analyzer.py
 ```
