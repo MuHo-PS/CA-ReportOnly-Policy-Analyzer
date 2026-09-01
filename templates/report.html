@@ -1,0 +1,143 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>CA Report-Only Policy Analyzer — Report</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; }
+  .cards { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 2rem; }
+  .card { border: 1px solid #ccc; border-radius: 6px; padding: 1rem; min-width: 160px; }
+  .card .value { font-size: 1.6rem; font-weight: bold; }
+  table { border-collapse: collapse; width: 100%; margin-bottom: 2rem; }
+  th, td { border: 1px solid #ccc; padding: 0.4rem 0.6rem; text-align: left; font-size: 0.85rem; }
+  .cell-would-apply { background: #d7f0d7; }
+  .cell-would-not-apply { background: #f5d7d7; }
+  .cell-mixed { background: #f5eccb; }
+  .cell-not-collected { background: #ddd; font-style: italic; }
+  .caveats { background: #fff8e1; border: 1px solid #e0c76a; padding: 1rem; margin-top: 2rem; }
+  .drill-down { display: none; border: 1px solid #ccc; padding: 0.5rem; margin-top: 0.5rem; font-size: 0.8rem; }
+  .bar { height: 18px; background: #4a90c8; display: inline-block; }
+</style>
+</head>
+<body>
+<h1>CA Report-Only Policy Analyzer — Report</h1>
+<div id="summary-cards" class="cards"></div>
+<h2>User &times; Policy Matrix</h2>
+<table id="matrix-table"></table>
+<div id="drill-down" class="drill-down"></div>
+<h2>Per-Policy Result Distribution</h2>
+<div id="policy-charts"></div>
+<div class="caveats">
+  <strong>Caveats</strong>
+  <ul>
+    <li>Results assume each policy's report-only/enforced mode was constant across the analyzed window — Graph only exposes the current policy list, not its history.</li>
+    <li>Interactive user sign-ins only; workload-identity/service-principal sign-ins are not included.</li>
+    <li>Requested vs. actual covered date range is shown above; a requested range beyond sign-in log retention will show fewer days actually covered.</li>
+  </ul>
+</div>
+
+<script>
+  const REPORT_DATA = __REPORT_DATA__;
+
+  function renderSummaryCards() {
+    const container = document.getElementById("summary-cards");
+    const cards = [
+      ["Sign-ins pulled", REPORT_DATA.meta.total_signins],
+      ["Users analyzed", REPORT_DATA.users.length],
+      ["Policies analyzed", REPORT_DATA.policies.length],
+      ["Requested days", REPORT_DATA.meta.requested_days],
+    ];
+    for (const [label, value] of cards) {
+      const div = document.createElement("div");
+      div.className = "card";
+      div.innerHTML = `<div>${label}</div><div class="value">${value}</div>`;
+      container.appendChild(div);
+    }
+  }
+
+  function dominantClass(cell) {
+    if (cell.not_collected) return "cell-not-collected";
+    const counts = cell.counts || {};
+    const applyCount = (counts.reportOnlySuccess || 0) + (counts.success || 0);
+    const notApplyCount = (counts.reportOnlyNotApplied || 0) + (counts.notApplied || 0) +
+                           (counts.reportOnlyFailure || 0) + (counts.failure || 0);
+    if (applyCount > 0 && notApplyCount === 0) return "cell-would-apply";
+    if (notApplyCount > 0 && applyCount === 0) return "cell-would-not-apply";
+    if (applyCount > 0 && notApplyCount > 0) return "cell-mixed";
+    return "cell-not-collected";
+  }
+
+  function cellLabel(cell) {
+    if (cell.not_collected) return "Not collected";
+    const total = Object.values(cell.counts || {}).reduce((a, b) => a + b, 0);
+    return `${total} evaluated / ${cell.not_evaluated_count} not evaluated`;
+  }
+
+  function renderMatrix() {
+    const table = document.getElementById("matrix-table");
+    const headerRow = document.createElement("tr");
+    headerRow.appendChild(document.createElement("th"));
+    for (const policy of REPORT_DATA.policies) {
+      const th = document.createElement("th");
+      th.textContent = policy.displayName;
+      headerRow.appendChild(th);
+    }
+    table.appendChild(headerRow);
+
+    for (const user of REPORT_DATA.users) {
+      const row = document.createElement("tr");
+      const nameCell = document.createElement("td");
+      nameCell.textContent = user.displayName;
+      row.appendChild(nameCell);
+      for (const policy of REPORT_DATA.policies) {
+        const cell = REPORT_DATA.matrix[user.id][policy.id];
+        const td = document.createElement("td");
+        td.className = dominantClass(cell);
+        td.textContent = cellLabel(cell);
+        td.style.cursor = "pointer";
+        td.addEventListener("click", () => showDrillDown(user, policy, cell));
+        row.appendChild(td);
+      }
+      table.appendChild(row);
+    }
+  }
+
+  function showDrillDown(user, policy, cell) {
+    const el = document.getElementById("drill-down");
+    if (cell.not_collected) {
+      el.innerHTML = `<strong>${user.displayName} / ${policy.displayName}</strong>: not collected — ${cell.reason}`;
+    } else {
+      const rows = (cell.sample_events || []).map(e =>
+        `<tr><td>${e.timestamp}</td><td>${e.app}</td><td>${e.location}</td><td>${e.result_bucket}</td></tr>`
+      ).join("");
+      el.innerHTML = `<strong>${user.displayName} / ${policy.displayName}</strong> — sample events:
+        <table><tr><th>Time</th><th>App</th><th>Location</th><th>Result</th></tr>${rows}</table>`;
+    }
+    el.style.display = "block";
+  }
+
+  function renderPolicyCharts() {
+    const container = document.getElementById("policy-charts");
+    for (const policy of REPORT_DATA.policies) {
+      const totals = REPORT_DATA.policy_totals[policy.id];
+      const total = Object.values(totals.counts).reduce((a, b) => a + b, 0) + totals.not_evaluated_count;
+      const div = document.createElement("div");
+      div.innerHTML = `<h3>${policy.displayName}</h3>`;
+      for (const [bucket, count] of Object.entries(totals.counts)) {
+        const width = total > 0 ? Math.round((count / total) * 300) : 0;
+        div.innerHTML += `<div>${bucket}: <span class="bar" style="width:${width}px"></span> ${count}</div>`;
+      }
+      div.innerHTML += `<div>not_evaluated: <span class="bar" style="width:${total > 0 ? Math.round((totals.not_evaluated_count / total) * 300) : 0}px; background:#999;"></span> ${totals.not_evaluated_count}</div>`;
+      if (totals.not_collected_users > 0) {
+        div.innerHTML += `<div><em>${totals.not_collected_users} user(s) not collected for this policy</em></div>`;
+      }
+      container.appendChild(div);
+    }
+  }
+
+  renderSummaryCards();
+  renderMatrix();
+  renderPolicyCharts();
+</script>
+</body>
+</html>
