@@ -59,15 +59,18 @@ every Windows machine has built in by default.
 .\tests\test-server.ps1
 .\tests\test-pagination.ps1
 .\tests\test-report-browser.ps1
+.\tests\test-picker-browser.ps1
 ```
 
-57 tests total, run against real Windows PowerShell (not mocked) — the
+69 tests total, run against real Windows PowerShell (not mocked) — the
 aggregation logic, HTML/JSON generation and escaping, the real transient HTTP
 selection server's GET/POST round trip, Graph pagination (single-page and
-multi-page), and `test-report-browser.ps1`, which actually loads the
-generated report into headless Microsoft Edge and inspects the real rendered
-DOM rather than just checking the JS source text — skips gracefully if Edge
-isn't installed.
+multi-page), and two tests that actually load the generated pages into
+headless Microsoft Edge and inspect the real rendered DOM rather than just
+checking the JS source text: `test-report-browser.ps1` (the report) and
+`test-picker-browser.ps1` (the picker — simulates real typing/clicking via
+dispatched DOM events to prove selections survive a search-filter
+re-render). Both skip gracefully if Edge isn't installed.
 
 ## Required permissions
 
@@ -184,3 +187,31 @@ codebase:**
   font) from the main GBG Assessment Tool's own report CSS, rather than an
   invented palette — consistency across the tool family, not a new visual
   language per report.
+- **`ConvertTo-Json` serializes a ONE-element array as a bare JSON object,
+  not a one-element array — but only when that array is the TOP-LEVEL value
+  handed to it.** A nested array buried inside a larger object (e.g. a
+  matrix cell's `sampleEvents` list) serializes correctly regardless of its
+  element count — verified directly; only the root value is affected. This
+  meant the picker would throw `items is not iterable` and render nothing
+  at all on any tenant with exactly one discovered user or exactly one
+  report-only policy, silently working everywhere else. Found by actually
+  running the picker in headless Edge against a single-user test fixture
+  and reading a real thrown JS error (`window.onerror`), not by code
+  review — every earlier test happened to use either zero or two-or-more
+  items. `ConvertTo-ScriptSafeJson` now builds arrays by hand (serializing
+  each element individually and joining with `[...]`) instead of trusting
+  `ConvertTo-Json`'s own count-dependent behavior for the outer array.
+- **Selections must survive a search-filter re-render, and this needs a
+  real interaction test to prove, not a static one.** `renderCheckboxList`
+  rebuilds every checkbox element from scratch on each keystroke in the
+  search box — anything tracked only in the live DOM (a checkbox's own
+  `.checked` property) is silently wiped, including items that still match
+  the new filter. Selection state now lives in persistent `Set` objects
+  (`selectedUserIds`/`selectedPolicyIds`) that survive every re-render,
+  restored onto each checkbox as it's recreated, instead of being read back
+  from the DOM. `tests/test-picker-browser.ps1` proves this by actually
+  dispatching real `input`/`change` events in headless Edge (check a box,
+  filter it out of view, clear the filter, assert it's still checked) —
+  a bug in the earlier design, and the "Select all" / "Clear" buttons
+  added alongside it, both had to be verified this way; reading the code
+  is not enough evidence for interactive behavior like this.

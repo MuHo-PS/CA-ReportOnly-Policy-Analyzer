@@ -352,13 +352,28 @@ function Resolve-UserScope {
 # proactively, not discovered after the fact.
 function ConvertTo-ScriptSafeJson {
     param($InputObject, [int]$Depth = 12)
-    # Real PowerShell quirk, caught by testing: ConvertTo-Json on an empty
-    # array returns $null, not the string "[]" -- if unhandled, any list
-    # that happens to be empty (zero users, zero policies, etc.) would
-    # embed literal `null` (or crash here) instead of a valid empty array
-    # the page's JS can safely iterate.
-    if ($InputObject -is [array] -and $InputObject.Count -eq 0) {
-        return "[]"
+    # Two real PowerShell/ConvertTo-Json quirks, both caught by testing, both
+    # specific to the TOP-LEVEL value handed to ConvertTo-Json (a nested
+    # array buried inside a larger object -- e.g. Get-ReportHtml's
+    # $reportData.matrix[...].sampleEvents -- is NOT affected, verified
+    # directly; only the root value is):
+    #   1. An empty array returns $null, not the string "[]".
+    #   2. A ONE-element array serializes as a bare JSON OBJECT, not a
+    #      one-element JSON array -- e.g. a tenant with exactly one
+    #      discovered user or exactly one report-only policy would embed
+    #      `{"id":...}` where the page's JS expects `[{"id":...}]`, and
+    #      `for (const item of items)` throws "items is not iterable".
+    # Building the array by hand for any array-typed input, regardless of
+    # element count, sidesteps both cases uniformly instead of chasing
+    # each count as its own special case.
+    if ($InputObject -is [array]) {
+        if ($InputObject.Count -eq 0) { return "[]" }
+        $parts = foreach ($item in $InputObject) {
+            $itemJson = $item | ConvertTo-Json -Depth $Depth -Compress
+            if ($null -eq $itemJson) { $itemJson = "null" }
+            $itemJson.Replace("</script>", "<\/script>")
+        }
+        return "[" + ($parts -join ",") + "]"
     }
     $json = $InputObject | ConvertTo-Json -Depth $Depth -Compress
     if ($null -eq $json) { return "[]" }
@@ -472,6 +487,12 @@ $Script:SharedPageStyle = @'
   .days-row { display: flex; align-items: center; gap: 0.75rem; }
   .days-row input { width: 90px; margin-bottom: 0; }
   .hint { color: var(--text-muted); font-size: 0.82rem; margin-top: 0.4rem; }
+  .list-actions { display: flex; gap: 1rem; margin: 0.1rem 0 0.5rem; }
+  .link-btn {
+    background: none; border: none; padding: 0; margin: 0;
+    color: var(--accent); font-size: 0.82rem; font-weight: 600; cursor: pointer;
+  }
+  .link-btn:hover { text-decoration: underline; }
   .primary-btn {
     background: var(--accent);
     color: white;
@@ -539,6 +560,10 @@ $Script:SharedPageStyle
     <div class="card-title"><span class="accent-dot"></span>Report-only policies</div>
     <p class="hint" style="margin-top:0;margin-bottom:0.75rem;">$policyCountNote</p>
     <input type="search" id="policy-search" placeholder="Search policies...">
+    <div class="list-actions">
+      <button type="button" class="link-btn" id="policy-select-all">Select all</button>
+      <button type="button" class="link-btn" id="policy-clear">Clear</button>
+    </div>
     <div class="scroll-list" id="policy-list"></div>
   </div>
 
@@ -578,6 +603,19 @@ $Script:SharedPageStyle
       checkbox.type = "checkbox";
       checkbox.value = item.id;
       checkbox.dataset.role = role;
+      // Selection state lives in selectedUserIds/selectedPolicyIds (Sets),
+      // not just the checkbox's own .checked property -- renderCheckboxList
+      // rebuilds every checkbox from scratch on every search keystroke, so
+      // anything tracked only in the DOM would be silently wiped by typing
+      // in the search box, including selections that still match the new
+      // filter. Checked state is restored from the Set here, and any
+      // change is written back to the Set immediately.
+      const selectedSet = role === "user" ? selectedUserIds : selectedPolicyIds;
+      checkbox.checked = selectedSet.has(item.id);
+      checkbox.addEventListener("change", () => {
+        if (checkbox.checked) selectedSet.add(item.id);
+        else selectedSet.delete(item.id);
+      });
       label.appendChild(checkbox);
       const nameSpan = document.createElement("span");
       nameSpan.className = "policy-name";
@@ -586,6 +624,9 @@ $Script:SharedPageStyle
       container.appendChild(label);
     }
   }
+
+  const selectedUserIds = new Set();
+  const selectedPolicyIds = new Set();
 
   const userList = document.getElementById("user-list");
   const policyList = document.getElementById("policy-list");
@@ -600,6 +641,23 @@ $Script:SharedPageStyle
   document.getElementById("policy-search").addEventListener("input", (e) => {
     const term = e.target.value.toLowerCase();
     renderCheckboxList(policyList, POLICIES.filter(p => (p.displayName || "").toLowerCase().includes(term)), "policy");
+  });
+
+  // Select all / Clear act on whatever the current search filter is
+  // showing, not the full unfiltered list -- "select all of what I'm
+  // looking at" is the reading that stays consistent with the search box
+  // actually doing something when combined with these buttons.
+  document.getElementById("policy-select-all").addEventListener("click", () => {
+    policyList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.checked = true;
+      selectedPolicyIds.add(cb.value);
+    });
+  });
+  document.getElementById("policy-clear").addEventListener("click", () => {
+    policyList.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+      cb.checked = false;
+      selectedPolicyIds.delete(cb.value);
+    });
   });
 
   const daysInput = document.getElementById("days-input");
@@ -617,22 +675,25 @@ $Script:SharedPageStyle
   const generateBtn = document.getElementById("generate-btn");
   generateBtn.addEventListener("click", () => {
     const allUsers = allUsersCheckbox.checked;
-    const selectedUserIds = Array.from(userList.querySelectorAll("input:checked")).map(cb => cb.value);
-    const selectedPolicyIds = Array.from(policyList.querySelectorAll("input:checked")).map(cb => cb.value);
+    // Read from the persistent Sets, not the live DOM -- a selection made
+    // before a search-box filter narrowed the visible list would otherwise
+    // be silently dropped even though it's still genuinely selected.
+    const userIdsArr = Array.from(selectedUserIds);
+    const policyIdsArr = Array.from(selectedPolicyIds);
 
-    if (!allUsers && selectedUserIds.length === 0) {
+    if (!allUsers && userIdsArr.length === 0) {
       document.getElementById("status").textContent = "Select at least one user, or \"All users\".";
       return;
     }
-    if (selectedPolicyIds.length === 0) {
+    if (policyIdsArr.length === 0) {
       document.getElementById("status").textContent = "Select at least one report-only policy.";
       return;
     }
 
     const payload = {
       all_users: allUsers,
-      user_ids: selectedUserIds,
-      policy_ids: selectedPolicyIds,
+      user_ids: userIdsArr,
+      policy_ids: policyIdsArr,
       days: Number(daysInput.value),
     };
 

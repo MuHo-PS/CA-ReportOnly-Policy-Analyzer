@@ -9,6 +9,20 @@ function Assert-True {
     else { $script:failCount++; Write-Host "FAIL: $Name" -ForegroundColor Red }
 }
 
+# --- ConvertTo-ScriptSafeJson: the exact bug that broke the picker on any
+# tenant with exactly one discovered user or exactly one report-only
+# policy. Windows PowerShell's ConvertTo-Json serializes a ONE-element
+# array as a bare JSON object, not a one-element array, when that array is
+# the top-level value handed to it -- found only by actually running the
+# picker in a real browser against a single-user fixture and reading the
+# thrown "items is not iterable" error, not by code review. ---
+Assert-True ((ConvertTo-ScriptSafeJson -InputObject @()) -eq "[]") "empty array serializes as a real empty array, not null"
+$oneItemJson = ConvertTo-ScriptSafeJson -InputObject @([PSCustomObject]@{ id = "u1" })
+Assert-True ($oneItemJson.StartsWith("[") -and $oneItemJson.EndsWith("]")) "a ONE-element array serializes as a JSON array, not a bare object"
+Assert-True ($oneItemJson -eq '[{"id":"u1"}]') "a one-element array's JSON is exactly what a browser's for-of loop needs"
+$twoItemJson = ConvertTo-ScriptSafeJson -InputObject @([PSCustomObject]@{ id = "u1" }, [PSCustomObject]@{ id = "u2" })
+Assert-True ($twoItemJson -eq '[{"id":"u1"},{"id":"u2"}]') "a two-element array still serializes correctly (regression guard)"
+
 # --- Picker page: script-injection escaping ---
 $trickyUsers = @([PSCustomObject]@{ id = "u1"; displayName = "Alice</script><script>alert(1)</script>" })
 $policies = @([PSCustomObject]@{ id = "p1"; displayName = "Require MFA (report-only)" })
