@@ -32,7 +32,7 @@
   <ul>
     <li>Results assume each policy's report-only/enforced mode was constant across the analyzed window — Graph only exposes the current policy list, not its history.</li>
     <li>Interactive user sign-ins only; workload-identity/service-principal sign-ins are not included.</li>
-    <li>Requested vs. actual covered date range is shown above; a requested range beyond sign-in log retention will show fewer days actually covered.</li>
+    <li>Requested day range is shown above; this tool does not independently verify whether the tenant's sign-in log retention actually covered the full requested range.</li>
   </ul>
 </div>
 
@@ -45,11 +45,22 @@
     return div.innerHTML;
   }
 
+  function countNotCollectedUsers() {
+    let count = 0;
+    for (const user of REPORT_DATA.users) {
+      const userRow = REPORT_DATA.matrix[user.id] || {};
+      const notCollected = Object.values(userRow).some(cell => cell.not_collected);
+      if (notCollected) count += 1;
+    }
+    return count;
+  }
+
   function renderSummaryCards() {
     const container = document.getElementById("summary-cards");
     const cards = [
       ["Sign-ins pulled", REPORT_DATA.meta.total_signins],
       ["Users analyzed", REPORT_DATA.users.length],
+      ["Not collected", countNotCollectedUsers()],
       ["Policies analyzed", REPORT_DATA.policies.length],
       ["Requested days", REPORT_DATA.meta.requested_days],
     ];

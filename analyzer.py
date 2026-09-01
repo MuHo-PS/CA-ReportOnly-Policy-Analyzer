@@ -77,7 +77,6 @@ def run_pipeline(authenticator, session, open_browser: bool = True,
     meta = {
         "total_signins": total_signins,
         "requested_days": selection["days"],
-        "actual_days_covered": min(selection["days"], 30),
     }
 
     html = render_report(matrix_result, scoped_users, report_policies, meta, REPORT_TEMPLATE)

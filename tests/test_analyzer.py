@@ -77,6 +77,42 @@ def test_run_pipeline_marks_user_not_collected_on_permission_error(
             # A failed bulk pull must mark every scoped user "not collected" —
             # never crash uncaught, and never render as a fabricated zero.
             assert "cell-not-collected" in html
+            # The report must not claim a fabricated "actual days covered"
+            # number that was never actually measured from real data.
+            assert "actual_days_covered" not in html
+
+
+@patch("analyzer.run_selection_server")
+@patch("analyzer.fetch_groups", return_value=GROUPS)
+@patch("analyzer.fetch_users")
+@patch("analyzer.fetch_ca_policies", return_value=CA_POLICIES)
+def test_run_pipeline_summary_reflects_not_collected_users(
+    mock_fetch_ca, mock_fetch_users, mock_fetch_groups, mock_selection_server
+):
+    from graph_client import GraphPermissionError
+
+    two_users = [
+        {"id": "u1", "displayName": "Alice", "userPrincipalName": "alice@contoso.com"},
+        {"id": "u2", "displayName": "Bob", "userPrincipalName": "bob@contoso.com"},
+    ]
+    mock_fetch_users.return_value = two_users
+    mock_selection_server.return_value = {
+        "all_users": True, "user_ids": [], "group_ids": [], "policy_ids": ["p1"], "days": 30,
+    }
+
+    def fake_fetch_signins_all(session, headers, since_iso):
+        raise GraphPermissionError("403 on bulk sign-in pull")
+
+    with patch("analyzer.fetch_signins_all", side_effect=fake_fetch_signins_all):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_path = os.path.join(tmp_dir, "report.html")
+            run_pipeline(MagicMock(acquire_token=lambda: "tok"), MagicMock(),
+                         open_browser=False, output_path=output_path)
+            with open(output_path, "r", encoding="utf-8") as f:
+                html = f.read()
+            # Both users are embedded in REPORT_DATA.matrix as not_collected;
+            # the raw data must be present for the summary card computation.
+            assert html.count('"not_collected": true') >= 2 or html.count('"not_collected":true') >= 2
 
 
 @patch("analyzer.run_selection_server")
