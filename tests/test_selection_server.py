@@ -4,7 +4,7 @@ from unittest.mock import patch
 
 import requests
 
-from selection_server import run_selection_server
+from selection_server import run_selection_server, _render_picker_html
 
 USERS = [{"id": "u1", "displayName": "Alice"}]
 GROUPS = [{"id": "g1", "displayName": "Engineering"}]
@@ -85,3 +85,10 @@ def test_submit_returns_exact_payload_and_server_shuts_down(mock_open):
     thread.join(timeout=5)
     assert not thread.is_alive()
     assert result_holder["selection"] == payload
+
+
+def test_render_picker_html_escapes_script_closing_tag_in_display_name():
+    malicious_users = [{"id": "u1", "displayName": "</script><script>alert(1)</script>"}]
+    html = _render_picker_html(TEMPLATE_PATH, malicious_users, GROUPS, POLICIES)
+    assert "</script><script>alert(1)</script>" not in html
+    assert "<\\/script>" in html

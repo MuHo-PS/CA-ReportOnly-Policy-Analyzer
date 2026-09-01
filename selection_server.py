@@ -10,14 +10,18 @@ import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 
+def _json_for_script(value) -> str:
+    return json.dumps(value).replace("</script>", "<\\/script>")
+
+
 def _render_picker_html(template_path: str, users: list[dict], groups: list[dict], policies: list[dict]) -> str:
     with open(template_path, "r", encoding="utf-8") as f:
         template = f.read()
     return (
         template
-        .replace("__USERS_JSON__", json.dumps(users))
-        .replace("__GROUPS_JSON__", json.dumps(groups))
-        .replace("__POLICIES_JSON__", json.dumps(policies))
+        .replace("__USERS_JSON__", _json_for_script(users))
+        .replace("__GROUPS_JSON__", _json_for_script(groups))
+        .replace("__POLICIES_JSON__", _json_for_script(policies))
     )
 
 
