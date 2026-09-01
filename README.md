@@ -31,8 +31,8 @@ Either way:
    `https://login.microsoft.com/device` in any browser (even your phone), enter
    the code, sign in with an account that has read rights in the tenant you want
    to analyze.
-2. **A selection page opens automatically** — search/multi-select users or groups
-   (or "all users"), pick which **report-only** Conditional Access policies to
+2. **A selection page opens automatically** — search/multi-select users (or "all
+   users"), search/select which **report-only** Conditional Access policies to
    analyze (only report-only ones are ever shown — this tool measures what they
    would have done, not enforced policies), set the day range, click Generate.
 3. **Progress prints to the terminal** while sign-in logs are pulled — this can
@@ -78,7 +78,6 @@ tenant:
 - `AuditLog.Read.All` — read sign-in logs
 - `Policy.Read.All` — read Conditional Access policies
 - `User.Read.All` — list users for the picker
-- `Group.Read.All` — list groups and resolve group membership for the picker
 
 This tool is read-only. It never writes, creates, or modifies anything in your tenant.
 

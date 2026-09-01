@@ -12,7 +12,7 @@ function Assert-True {
 # --- Picker page: script-injection escaping ---
 $trickyUsers = @([PSCustomObject]@{ id = "u1"; displayName = "Alice</script><script>alert(1)</script>" })
 $policies = @([PSCustomObject]@{ id = "p1"; displayName = "Require MFA (report-only)" })
-$pickerHtml = Get-PickerHtml -Users $trickyUsers -Groups @() -ReportOnlyPolicies $policies
+$pickerHtml = Get-PickerHtml -Users $trickyUsers -ReportOnlyPolicies $policies
 
 Assert-True (-not $pickerHtml.Contains("</script><script>alert(1)</script>")) "picker escapes literal </script> in embedded JSON"
 # Windows PowerShell's ConvertTo-Json Unicode-escapes < and > by default
@@ -31,8 +31,14 @@ $normalUsers = @(
     [PSCustomObject]@{ id = "u1"; displayName = "Alice" },
     [PSCustomObject]@{ id = "u2"; displayName = "Bob" }
 )
-$normalHtml = Get-PickerHtml -Users $normalUsers -Groups @() -ReportOnlyPolicies $policies
+$normalHtml = Get-PickerHtml -Users $normalUsers -ReportOnlyPolicies $policies
 Assert-True ($normalHtml.Contains('"Alice"') -and $normalHtml.Contains('"Bob"')) "picker embeds both user names"
+
+# --- Picker page: no groups UI, and a policy search filter exists ---
+Assert-True (-not $normalHtml.Contains('id="group-list"')) "groups UI has been removed from the picker"
+Assert-True (-not $normalHtml.Contains('group_ids')) "group_ids no longer appears anywhere in the picker payload"
+Assert-True ($normalHtml.Contains('id="policy-search"')) "a policy search input exists, matching the user search"
+Assert-True ($normalHtml.Contains('getElementById("policy-search")') -and $normalHtml.Contains('addEventListener("input"')) "the policy search input is actually wired to filter the policy list"
 
 # --- Report page: full render with real matrix data ---
 $users = @([PSCustomObject]@{ id = "u1"; displayName = "Alice"; userPrincipalName = "alice@contoso.com" })

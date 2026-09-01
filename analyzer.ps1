@@ -20,7 +20,7 @@ $ProgressPreference = "SilentlyContinue"
 # ===========================================================================
 
 $Script:ClientId = "14d82eec-204b-4c2f-b7e8-296a70dab67e"
-$Script:Scopes = "AuditLog.Read.All Policy.Read.All User.Read.All Group.Read.All"
+$Script:Scopes = "AuditLog.Read.All Policy.Read.All User.Read.All"
 $Script:GraphBase = "https://graph.microsoft.com/v1.0"
 $Script:AuthorityBase = "https://login.microsoftonline.com/organizations/oauth2/v2.0"
 
@@ -170,16 +170,6 @@ function Get-DiscoveryUsers {
     return Get-GraphAllPages -Uri "$($Script:GraphBase)/users?`$select=id,displayName,userPrincipalName" -Headers $Headers
 }
 
-function Get-DiscoveryGroups {
-    param([hashtable]$Headers)
-    return Get-GraphAllPages -Uri "$($Script:GraphBase)/groups?`$select=id,displayName" -Headers $Headers
-}
-
-function Get-GroupMembers {
-    param([hashtable]$Headers, [string]$GroupId)
-    return Get-GraphAllPages -Uri "$($Script:GraphBase)/groups/$GroupId/members" -Headers $Headers
-}
-
 function Get-SignInsForUser {
     param([hashtable]$Headers, [string]$UserPrincipalName, [string]$SinceIso, [scriptblock]$OnPage = $null)
     $filter = "userPrincipalName eq '$UserPrincipalName' and createdDateTime ge $SinceIso"
@@ -324,14 +314,13 @@ function Get-PolicyTotals {
 }
 
 # ===========================================================================
-# User-scope resolution (all / specific users / groups, deduped)
+# User-scope resolution (all users, or specific users)
 # ===========================================================================
 
 function Resolve-UserScope {
     param(
         [hashtable]$Selection,
-        [array]$DiscoveredUsers,
-        [scriptblock]$FetchGroupMembers
+        [array]$DiscoveredUsers
     )
     # PowerShell gotcha: a bare array `return`ed from a function is silently
     # unwrapped to a scalar when it holds exactly one (or zero) elements.
@@ -346,13 +335,6 @@ function Resolve-UserScope {
 
     foreach ($userId in $Selection.user_ids) {
         if ($usersById.ContainsKey($userId)) { $selectedIds[$userId] = $true }
-    }
-
-    foreach ($groupId in $Selection.group_ids) {
-        $members = & $FetchGroupMembers $groupId
-        foreach ($member in $members) {
-            if ($usersById.ContainsKey($member.id)) { $selectedIds[$member.id] = $true }
-        }
     }
 
     $result = New-Object System.Collections.ArrayList
@@ -372,7 +354,7 @@ function ConvertTo-ScriptSafeJson {
     param($InputObject, [int]$Depth = 12)
     # Real PowerShell quirk, caught by testing: ConvertTo-Json on an empty
     # array returns $null, not the string "[]" -- if unhandled, any list
-    # that happens to be empty (zero groups, zero policies, etc.) would
+    # that happens to be empty (zero users, zero policies, etc.) would
     # embed literal `null` (or crash here) instead of a valid empty array
     # the page's JS can safely iterate.
     if ($InputObject -is [array] -and $InputObject.Count -eq 0) {
@@ -522,10 +504,9 @@ $Script:SharedPageStyle = @'
 # ===========================================================================
 
 function Get-PickerHtml {
-    param([array]$Users, [array]$Groups, [array]$ReportOnlyPolicies)
+    param([array]$Users, [array]$ReportOnlyPolicies)
 
     $usersJson = ConvertTo-ScriptSafeJson -InputObject @($Users)
-    $groupsJson = ConvertTo-ScriptSafeJson -InputObject @($Groups)
     $policiesJson = ConvertTo-ScriptSafeJson -InputObject @($ReportOnlyPolicies)
 
     $policyCountNote = if ($ReportOnlyPolicies.Count -eq 0) {
@@ -555,15 +536,9 @@ $Script:SharedPageStyle
   </div>
 
   <div class="card">
-    <div class="card-title"><span class="accent-dot"></span>Groups</div>
-    <input type="search" id="group-search" placeholder="Search groups...">
-    <div class="scroll-list" id="group-list"></div>
-    <p class="hint">Selecting a group includes its current members at run time.</p>
-  </div>
-
-  <div class="card">
     <div class="card-title"><span class="accent-dot"></span>Report-only policies</div>
     <p class="hint" style="margin-top:0;margin-bottom:0.75rem;">$policyCountNote</p>
+    <input type="search" id="policy-search" placeholder="Search policies...">
     <div class="scroll-list" id="policy-list"></div>
   </div>
 
@@ -593,7 +568,6 @@ $Script:SharedPageStyle
 
 <script>
   const USERS = $usersJson;
-  const GROUPS = $groupsJson;
   const POLICIES = $policiesJson;
 
   function renderCheckboxList(container, items, role) {
@@ -614,20 +588,18 @@ $Script:SharedPageStyle
   }
 
   const userList = document.getElementById("user-list");
-  const groupList = document.getElementById("group-list");
   const policyList = document.getElementById("policy-list");
 
   renderCheckboxList(userList, USERS, "user");
-  renderCheckboxList(groupList, GROUPS, "group");
   renderCheckboxList(policyList, POLICIES, "policy");
 
   document.getElementById("user-search").addEventListener("input", (e) => {
     const term = e.target.value.toLowerCase();
     renderCheckboxList(userList, USERS.filter(u => (u.displayName || "").toLowerCase().includes(term)), "user");
   });
-  document.getElementById("group-search").addEventListener("input", (e) => {
+  document.getElementById("policy-search").addEventListener("input", (e) => {
     const term = e.target.value.toLowerCase();
-    renderCheckboxList(groupList, GROUPS.filter(g => (g.displayName || "").toLowerCase().includes(term)), "group");
+    renderCheckboxList(policyList, POLICIES.filter(p => (p.displayName || "").toLowerCase().includes(term)), "policy");
   });
 
   const daysInput = document.getElementById("days-input");
@@ -646,11 +618,10 @@ $Script:SharedPageStyle
   generateBtn.addEventListener("click", () => {
     const allUsers = allUsersCheckbox.checked;
     const selectedUserIds = Array.from(userList.querySelectorAll("input:checked")).map(cb => cb.value);
-    const selectedGroupIds = Array.from(groupList.querySelectorAll("input:checked")).map(cb => cb.value);
     const selectedPolicyIds = Array.from(policyList.querySelectorAll("input:checked")).map(cb => cb.value);
 
-    if (!allUsers && selectedUserIds.length === 0 && selectedGroupIds.length === 0) {
-      document.getElementById("status").textContent = "Select at least one user, group, or \"All users\".";
+    if (!allUsers && selectedUserIds.length === 0) {
+      document.getElementById("status").textContent = "Select at least one user, or \"All users\".";
       return;
     }
     if (selectedPolicyIds.length === 0) {
@@ -661,7 +632,6 @@ $Script:SharedPageStyle
     const payload = {
       all_users: allUsers,
       user_ids: selectedUserIds,
-      group_ids: selectedGroupIds,
       policy_ids: selectedPolicyIds,
       days: Number(daysInput.value),
     };
@@ -693,7 +663,6 @@ $Script:SharedPageStyle
 function Start-SelectionServer {
     param(
         [array]$Users,
-        [array]$Groups,
         [array]$ReportOnlyPolicies,
         # Forces a specific port instead of scanning -- used by tests for a
         # deterministic, immediately-known address. Real runs omit this.
@@ -720,7 +689,7 @@ function Start-SelectionServer {
     }
     if (-not $port) { throw "Could not bind a local port for the selection page." }
 
-    $pageHtml = Get-PickerHtml -Users $Users -Groups $Groups -ReportOnlyPolicies $ReportOnlyPolicies
+    $pageHtml = Get-PickerHtml -Users $Users -ReportOnlyPolicies $ReportOnlyPolicies
     $url = "http://127.0.0.1:$port/"
 
     try { Start-Process $url | Out-Null } catch {
@@ -776,7 +745,6 @@ function Start-SelectionServer {
                     $selection = @{
                         all_users  = [bool]$parsed.all_users
                         user_ids   = @($parsed.user_ids)
-                        group_ids  = @($parsed.group_ids)
                         policy_ids = @($parsed.policy_ids)
                         days       = [int]$parsed.days
                     }
@@ -1255,7 +1223,7 @@ function Invoke-CaReportOnlyAnalysis {
     Write-Host "Signed in." -ForegroundColor Green
     Write-Host ""
 
-    Write-Host "Discovering Conditional Access policies, users, and groups..."
+    Write-Host "Discovering Conditional Access policies and users..."
     $policiesResp = Get-CaPolicies -Headers $headers
     if (-not $policiesResp.Success) {
         throw "Could not read Conditional Access policies: $($policiesResp.Reason) -- $($policiesResp.Message)"
@@ -1268,27 +1236,14 @@ function Invoke-CaReportOnlyAnalysis {
         throw "Could not read users: $($usersResp.Reason) -- $($usersResp.Message)"
     }
     Write-Host "  $($usersResp.Data.Count) users found."
-
-    $groupsResp = Get-DiscoveryGroups -Headers $headers
-    if (-not $groupsResp.Success) {
-        throw "Could not read groups: $($groupsResp.Reason) -- $($groupsResp.Message)"
-    }
-    Write-Host "  $($groupsResp.Data.Count) groups found."
     Write-Host ""
 
     Write-Host "Opening the selection page in your browser..." -ForegroundColor Cyan
-    $selection = Start-SelectionServer -Users $usersResp.Data -Groups $groupsResp.Data -ReportOnlyPolicies $reportOnlyPolicies
+    $selection = Start-SelectionServer -Users $usersResp.Data -ReportOnlyPolicies $reportOnlyPolicies
     Write-Host "Selection received." -ForegroundColor Green
     Write-Host ""
 
-    $fetchGroupMembers = {
-        param($groupId)
-        $resp = Get-GroupMembers -Headers $headers -GroupId $groupId
-        if ($resp.Success) { return $resp.Data }
-        return @()
-    }.GetNewClosure()
-
-    $scopedUsers = Resolve-UserScope -Selection $selection -DiscoveredUsers $usersResp.Data -FetchGroupMembers $fetchGroupMembers
+    $scopedUsers = Resolve-UserScope -Selection $selection -DiscoveredUsers $usersResp.Data
     $selectedPolicyIdSet = @{}
     foreach ($id in $selection.policy_ids) { $selectedPolicyIdSet[$id] = $true }
     $reportPolicies = @($reportOnlyPolicies | Where-Object { $selectedPolicyIdSet.ContainsKey($_.id) })

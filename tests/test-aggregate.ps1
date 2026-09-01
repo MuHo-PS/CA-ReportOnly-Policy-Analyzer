@@ -105,21 +105,15 @@ Assert-Equal $totals.notCollectedUsers 1 "one not-collected user counted"
 Assert-Equal $totals.counts["reportOnlySuccess"] 1 "totals sum real counts only"
 
 # --- Resolve-UserScope ---
-$allScope = Resolve-UserScope -Selection @{ all_users = $true; user_ids = @(); group_ids = @() } -DiscoveredUsers $users -FetchGroupMembers { param($id) @() }
+$allScope = Resolve-UserScope -Selection @{ all_users = $true; user_ids = @() } -DiscoveredUsers $users
 Assert-Equal $allScope.Count 2 "all_users returns full discovered list"
 
-$specificScope = Resolve-UserScope -Selection @{ all_users = $false; user_ids = @("u2"); group_ids = @() } -DiscoveredUsers $users -FetchGroupMembers { param($id) @() }
+$specificScope = Resolve-UserScope -Selection @{ all_users = $false; user_ids = @("u2") } -DiscoveredUsers $users
 Assert-Equal $specificScope.Count 1 "specific user scope returns only selected"
 Assert-Equal $specificScope[0].id "u2" "specific user scope returns the right user"
 
-$groupScope = Resolve-UserScope -Selection @{ all_users = $false; user_ids = @(); group_ids = @("g1") } `
-    -DiscoveredUsers $users -FetchGroupMembers { param($id) @([PSCustomObject]@{ id = "u1" }) }
-Assert-Equal $groupScope.Count 1 "group scope expands via fetch-members callback"
-Assert-Equal $groupScope[0].id "u1" "group scope resolves to the right user"
-
-$dedupedScope = Resolve-UserScope -Selection @{ all_users = $false; user_ids = @("u1"); group_ids = @("g1") } `
-    -DiscoveredUsers $users -FetchGroupMembers { param($id) @([PSCustomObject]@{ id = "u1" }) }
-Assert-Equal $dedupedScope.Count 1 "user selected individually AND via group is deduped"
+$unknownIdScope = Resolve-UserScope -Selection @{ all_users = $false; user_ids = @("u2", "not-a-real-id") } -DiscoveredUsers $users
+Assert-Equal $unknownIdScope.Count 1 "a selected id not in discovered_users is silently skipped, never invented"
 
 Write-Host ""
 Write-Host "$script:passCount passed, $script:failCount failed" -ForegroundColor $(if ($script:failCount -eq 0) { "Green" } else { "Red" })

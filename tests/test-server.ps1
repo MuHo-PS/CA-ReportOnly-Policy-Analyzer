@@ -4,7 +4,6 @@ $ErrorActionPreference = "Stop"
 function Start-Process { param($Path) Write-Host "(browser open suppressed for test): $Path" }
 
 $users = @([PSCustomObject]@{ id = "u1"; displayName = "Alice" })
-$groups = @([PSCustomObject]@{ id = "g1"; displayName = "Engineering" })
 $policies = @([PSCustomObject]@{ id = "p1"; displayName = "Require MFA (report-only)" })
 $testPort = 8799
 
@@ -20,7 +19,7 @@ $clientScript = {
         return @{ ok = $false; stage = "GET"; error = $_.Exception.Message }
     }
 
-    $payload = @{ all_users = $false; user_ids = @("u1"); group_ids = @(); policy_ids = @("p1"); days = 14 } | ConvertTo-Json
+    $payload = @{ all_users = $false; user_ids = @("u1"); policy_ids = @("p1"); days = 14 } | ConvertTo-Json
     try {
         $postResp = Invoke-RestMethod -Uri "http://127.0.0.1:$Port/submit" -Method Post -Body $payload -ContentType "application/json" -TimeoutSec 5 -ErrorAction Stop
     } catch {
@@ -28,11 +27,10 @@ $clientScript = {
     }
 
     return @{
-        ok             = $true
-        hasAlice       = [bool]($getResp.Content -match "Alice")
-        hasEngineering = [bool]($getResp.Content -match "Engineering")
-        hasPolicy      = [bool]($getResp.Content -match "Require MFA")
-        postStatus     = $postResp.status
+        ok         = $true
+        hasAlice   = [bool]($getResp.Content -match "Alice")
+        hasPolicy  = [bool]($getResp.Content -match "Require MFA")
+        postStatus = $postResp.status
     }
 }
 
@@ -43,7 +41,7 @@ $asyncHandle = $ps.BeginInvoke()
 $selection = $null
 $serverError = $null
 try {
-    $selection = Start-SelectionServer -Users $users -Groups $groups -ReportOnlyPolicies $policies -FixedPort $testPort -MaxWaitSeconds 15
+    $selection = Start-SelectionServer -Users $users -ReportOnlyPolicies $policies -FixedPort $testPort -MaxWaitSeconds 15
 } catch {
     $serverError = $_.Exception.Message
 }
@@ -77,7 +75,6 @@ function Check {
 }
 
 Check ($jobResult.hasAlice) "GET / includes the real user name"
-Check ($jobResult.hasEngineering) "GET / includes the real group name"
 Check ($jobResult.hasPolicy) "GET / includes the real policy name"
 Check ($jobResult.postStatus -eq "ok") "POST /submit returned ok status"
 Check ($selection.all_users -eq $false) "returned selection: all_users false"
