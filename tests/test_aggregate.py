@@ -1,4 +1,4 @@
-from aggregate import classify_result, KNOWN_RESULTS, extract_applied_policy_entry, aggregate_cell
+from aggregate import classify_result, KNOWN_RESULTS, extract_applied_policy_entry, aggregate_cell, aggregate_user_policy_matrix, aggregate_policy_totals
 
 
 def test_known_report_only_results_pass_through():
@@ -121,3 +121,55 @@ def test_aggregate_cell_sample_event_result_bucket_is_not_evaluated_when_absent(
     sign_ins = [_signin(policies=[])]
     cell = aggregate_cell(sign_ins, "p1")
     assert cell["sample_events"][0]["result_bucket"] == "not_evaluated"
+
+
+USERS = [
+    {"id": "u1", "displayName": "Alice", "userPrincipalName": "alice@contoso.com"},
+    {"id": "u2", "displayName": "Bob", "userPrincipalName": "bob@contoso.com"},
+]
+POLICIES = [
+    {"id": "p1", "displayName": "Require MFA (report-only)", "state": "enabledForReportingButNotEnforced"},
+]
+
+
+def test_matrix_has_one_cell_per_user_per_policy():
+    signins_by_user = {
+        "u1": [_signin(policies=[{"id": "p1", "result": "reportOnlySuccess"}])],
+        "u2": [_signin(policies=[{"id": "p1", "result": "reportOnlyNotApplied"}])],
+    }
+    result = aggregate_user_policy_matrix(USERS, POLICIES, signins_by_user, {})
+    matrix = result["matrix"]
+    assert set(matrix.keys()) == {"u1", "u2"}
+    assert matrix["u1"]["p1"]["counts"] == {"reportOnlySuccess": 1}
+    assert matrix["u2"]["p1"]["counts"] == {"reportOnlyNotApplied": 1}
+
+
+def test_matrix_marks_not_collected_users_without_calling_aggregate_cell():
+    signins_by_user = {"u1": [_signin(policies=[{"id": "p1", "result": "reportOnlySuccess"}])]}
+    collection_errors = {"u2": "403 insufficient privileges reading AuditLog for bob@contoso.com"}
+    result = aggregate_user_policy_matrix(USERS, POLICIES, signins_by_user, collection_errors)
+    assert result["matrix"]["u2"]["p1"] == {
+        "not_collected": True,
+        "reason": "403 insufficient privileges reading AuditLog for bob@contoso.com",
+    }
+    assert result["matrix"]["u1"]["p1"]["not_collected"] is False
+
+
+def test_policy_totals_sum_across_users_and_track_not_collected_separately():
+    signins_by_user = {
+        "u1": [_signin(policies=[{"id": "p1", "result": "reportOnlySuccess"}]),
+               _signin(policies=[{"id": "p1", "result": "reportOnlySuccess"}])],
+        "u2": [_signin(policies=[])],  # not evaluated
+    }
+    collection_errors = {}
+    result = aggregate_user_policy_matrix(
+        USERS + [{"id": "u3", "displayName": "Carol", "userPrincipalName": "carol@contoso.com"}],
+        POLICIES,
+        signins_by_user,
+        {"u3": "token expired mid-pull"},
+    )
+    totals = aggregate_policy_totals(result["matrix"], "p1")
+    assert totals["counts"] == {"reportOnlySuccess": 2}
+    assert totals["not_evaluated_count"] == 1
+    assert totals["not_collected_users"] == 1
+    assert totals["total_signins"] == 3

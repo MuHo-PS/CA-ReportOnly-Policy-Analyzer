@@ -77,3 +77,61 @@ def aggregate_cell(sign_ins: list[dict], policy_id: str, max_samples: int = 50) 
         "total_signins": len(sign_ins),
         "sample_events": sample_events,
     }
+
+
+def aggregate_user_policy_matrix(
+    users: list[dict],
+    policies: list[dict],
+    signins_by_user: dict[str, list[dict]],
+    collection_errors: dict[str, str],
+    max_samples: int = 50,
+) -> dict:
+    """Build the full user x policy matrix.
+
+    A user present in collection_errors gets a {"not_collected": True,
+    "reason": ...} marker for every policy cell instead of a computed
+    aggregate — collection failure is a per-user fact, not a per-policy one,
+    so it applies uniformly across that user's row.
+    """
+    matrix: dict[str, dict[str, dict]] = {}
+    for user in users:
+        user_id = user["id"]
+        matrix[user_id] = {}
+        if user_id in collection_errors:
+            marker = {"not_collected": True, "reason": collection_errors[user_id]}
+            for policy in policies:
+                matrix[user_id][policy["id"]] = marker
+            continue
+
+        sign_ins = signins_by_user.get(user_id, [])
+        for policy in policies:
+            matrix[user_id][policy["id"]] = aggregate_cell(
+                sign_ins, policy["id"], max_samples=max_samples
+            )
+
+    return {"matrix": matrix}
+
+
+def aggregate_policy_totals(matrix: dict, policy_id: str) -> dict:
+    """Sum one policy's column across every user in the matrix."""
+    counts: dict[str, int] = {}
+    not_evaluated_count = 0
+    not_collected_users = 0
+    total_signins = 0
+
+    for user_id, policy_cells in matrix.items():
+        cell = policy_cells[policy_id]
+        if cell["not_collected"]:
+            not_collected_users += 1
+            continue
+        for bucket, count in cell["counts"].items():
+            counts[bucket] = counts.get(bucket, 0) + count
+        not_evaluated_count += cell["not_evaluated_count"]
+        total_signins += cell["total_signins"]
+
+    return {
+        "counts": counts,
+        "not_evaluated_count": not_evaluated_count,
+        "not_collected_users": not_collected_users,
+        "total_signins": total_signins,
+    }
