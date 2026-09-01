@@ -5,7 +5,7 @@
 .DESCRIPTION
     Finds a usable Python interpreter, installs the two required packages
     (msal, requests) if they aren't already present, then runs analyzer.py.
-    No venv, no manual pip steps — just run this script.
+    No venv, no manual pip steps -- just run this script.
 #>
 
 $ErrorActionPreference = "Stop"
@@ -39,7 +39,7 @@ $pythonDisplay = ($python.Cmd, ($python.Args -join " ") -join " ").Trim()
 Write-Host "Using Python: $pythonDisplay"
 
 # Check whether the two required packages are already importable for this
-# interpreter — skip the pip install entirely if so, since it's the slow step.
+# interpreter -- skip the pip install entirely if so, since it's the slow step.
 $checkArgs = $python.Args + @("-c", "import msal, requests")
 & $python.Cmd @checkArgs 2>$null
 $depsPresent = ($LASTEXITCODE -eq 0)
@@ -49,7 +49,7 @@ if (-not $depsPresent) {
     $installArgs = $python.Args + @("-m", "pip", "install", "-r", "requirements.txt")
     & $python.Cmd @installArgs
     if ($LASTEXITCODE -ne 0) {
-        Write-Error "pip install failed — see output above."
+        Write-Error "pip install failed -- see output above."
         exit 1
     }
 } else {
