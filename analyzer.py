@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 import requests
 
 from graph_client import (
-    DeviceCodeAuthenticator, GraphPermissionError,
+    DeviceCodeAuthenticator, GraphPermissionError, GraphThrottledError,
     fetch_ca_policies, fetch_users, fetch_groups, fetch_group_members,
     fetch_signins_for_user, fetch_signins_all,
 )
@@ -49,7 +49,7 @@ def run_pipeline(authenticator, session, open_browser: bool = True,
     if selection.get("all_users"):
         try:
             all_signins = fetch_signins_all(session, headers, since_iso)
-        except GraphPermissionError as exc:
+        except (GraphPermissionError, GraphThrottledError, requests.HTTPError) as exc:
             # The bulk pull covers every scoped user in one call, so a
             # failure here means none of them were collected — mark all of
             # them, never let it crash the whole report uncaught, and never
@@ -68,7 +68,7 @@ def run_pipeline(authenticator, session, open_browser: bool = True,
                 signins_by_user[user["id"]] = fetch_signins_for_user(
                     session, headers, user["userPrincipalName"], since_iso
                 )
-            except GraphPermissionError as exc:
+            except (GraphPermissionError, GraphThrottledError, requests.HTTPError) as exc:
                 collection_errors[user["id"]] = str(exc)
 
     matrix_result = aggregate_user_policy_matrix(scoped_users, report_policies, signins_by_user, collection_errors)

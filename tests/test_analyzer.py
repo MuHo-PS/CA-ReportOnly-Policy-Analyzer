@@ -77,3 +77,52 @@ def test_run_pipeline_marks_user_not_collected_on_permission_error(
             # A failed bulk pull must mark every scoped user "not collected" —
             # never crash uncaught, and never render as a fabricated zero.
             assert "cell-not-collected" in html
+
+
+@patch("analyzer.run_selection_server")
+@patch("analyzer.fetch_groups", return_value=GROUPS)
+@patch("analyzer.fetch_users", return_value=USERS)
+@patch("analyzer.fetch_ca_policies", return_value=CA_POLICIES)
+def test_run_pipeline_marks_user_not_collected_on_throttled_error_bulk(
+    mock_fetch_ca, mock_fetch_users, mock_fetch_groups, mock_selection_server
+):
+    from graph_client import GraphThrottledError
+
+    mock_selection_server.return_value = {
+        "all_users": True, "user_ids": [], "group_ids": [], "policy_ids": ["p1"], "days": 30,
+    }
+
+    with patch("analyzer.fetch_signins_all",
+               side_effect=GraphThrottledError("429 retries exhausted on bulk sign-in pull")):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_path = os.path.join(tmp_dir, "report.html")
+            # Must not raise uncaught, and must not discard already-collected data.
+            run_pipeline(MagicMock(acquire_token=lambda: "tok"), MagicMock(),
+                         open_browser=False, output_path=output_path)
+            with open(output_path, "r", encoding="utf-8") as f:
+                html = f.read()
+            assert "cell-not-collected" in html
+
+
+@patch("analyzer.run_selection_server")
+@patch("analyzer.fetch_groups", return_value=GROUPS)
+@patch("analyzer.fetch_users", return_value=USERS)
+@patch("analyzer.fetch_ca_policies", return_value=CA_POLICIES)
+def test_run_pipeline_marks_user_not_collected_on_throttled_error_per_user(
+    mock_fetch_ca, mock_fetch_users, mock_fetch_groups, mock_selection_server
+):
+    from graph_client import GraphThrottledError
+
+    mock_selection_server.return_value = {
+        "all_users": False, "user_ids": ["u1"], "group_ids": [], "policy_ids": ["p1"], "days": 30,
+    }
+
+    with patch("analyzer.fetch_signins_for_user",
+               side_effect=GraphThrottledError("429 retries exhausted for alice@contoso.com")):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            output_path = os.path.join(tmp_dir, "report.html")
+            run_pipeline(MagicMock(acquire_token=lambda: "tok"), MagicMock(),
+                         open_browser=False, output_path=output_path)
+            with open(output_path, "r", encoding="utf-8") as f:
+                html = f.read()
+            assert "cell-not-collected" in html
