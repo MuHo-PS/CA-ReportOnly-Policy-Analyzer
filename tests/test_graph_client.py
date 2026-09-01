@@ -131,3 +131,89 @@ def test_graph_get_all_pages_follows_next_link():
     assert session.request.call_args_list[1] == call(
         "GET", "https://graph.microsoft.com/v1.0/users?$skiptoken=abc", headers={}, params=None
     )
+
+
+from graph_client import (
+    fetch_ca_policies, fetch_users, fetch_groups, fetch_group_members,
+    fetch_signins_for_user, fetch_signins_all, GRAPH_BASE,
+)
+
+
+def test_fetch_ca_policies_calls_expected_url_and_returns_list(monkeypatch):
+    captured = {}
+
+    def fake_graph_get_all_pages(session, url, headers, params=None):
+        captured["url"] = url
+        captured["params"] = params
+        return [{"id": "p1", "displayName": "Require MFA", "state": "enabled"}]
+
+    monkeypatch.setattr("graph_client.graph_get_all_pages", fake_graph_get_all_pages)
+    result = fetch_ca_policies(session=MagicMock(), headers={"Authorization": "Bearer x"})
+    assert captured["url"] == f"{GRAPH_BASE}/identity/conditionalAccess/policies"
+    assert result == [{"id": "p1", "displayName": "Require MFA", "state": "enabled"}]
+
+
+def test_fetch_users_selects_lightweight_fields(monkeypatch):
+    captured = {}
+
+    def fake_graph_get_all_pages(session, url, headers, params=None):
+        captured["params"] = params
+        return [{"id": "u1", "displayName": "Alice", "userPrincipalName": "alice@contoso.com"}]
+
+    monkeypatch.setattr("graph_client.graph_get_all_pages", fake_graph_get_all_pages)
+    result = fetch_users(session=MagicMock(), headers={})
+    assert captured["params"] == {"$select": "id,displayName,userPrincipalName"}
+    assert result[0]["userPrincipalName"] == "alice@contoso.com"
+
+
+def test_fetch_groups_selects_lightweight_fields(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "graph_client.graph_get_all_pages",
+        lambda session, url, headers, params=None: captured.setdefault("params", params) or [],
+    )
+    fetch_groups(session=MagicMock(), headers={})
+    assert captured["params"] == {"$select": "id,displayName"}
+
+
+def test_fetch_group_members_uses_group_id_in_url(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "graph_client.graph_get_all_pages",
+        lambda session, url, headers, params=None: captured.setdefault("url", url) or [],
+    )
+    fetch_group_members(session=MagicMock(), headers={}, group_id="g1")
+    assert captured["url"] == f"{GRAPH_BASE}/groups/g1/members"
+
+
+def test_fetch_signins_for_user_filters_by_upn_and_date(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "graph_client.graph_get_all_pages",
+        lambda session, url, headers, params=None: captured.setdefault("params", params) or [],
+    )
+    fetch_signins_for_user(session=MagicMock(), headers={},
+                            user_principal_name="alice@contoso.com", since_iso="2026-08-01T00:00:00Z")
+    assert captured["params"] == {
+        "$filter": "userPrincipalName eq 'alice@contoso.com' and createdDateTime ge 2026-08-01T00:00:00Z"
+    }
+
+
+def test_fetch_signins_all_filters_by_date_only(monkeypatch):
+    captured = {}
+    monkeypatch.setattr(
+        "graph_client.graph_get_all_pages",
+        lambda session, url, headers, params=None: captured.setdefault("params", params) or [],
+    )
+    fetch_signins_all(session=MagicMock(), headers={}, since_iso="2026-08-01T00:00:00Z")
+    assert captured["params"] == {"$filter": "createdDateTime ge 2026-08-01T00:00:00Z"}
+
+
+def test_fetch_signins_for_user_propagates_permission_error(monkeypatch):
+    def raise_permission_error(*args, **kwargs):
+        raise GraphPermissionError("403 on this user")
+
+    monkeypatch.setattr("graph_client.graph_get_all_pages", raise_permission_error)
+    with pytest.raises(GraphPermissionError):
+        fetch_signins_for_user(session=MagicMock(), headers={},
+                                user_principal_name="bob@contoso.com", since_iso="2026-08-01T00:00:00Z")

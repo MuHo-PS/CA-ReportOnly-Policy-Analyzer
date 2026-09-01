@@ -93,3 +93,40 @@ def graph_get_all_pages(session, url: str, headers: dict, params: dict | None = 
         next_url = body.get("@odata.nextLink")
         next_params = None  # nextLink already carries all needed query params
     return results
+
+
+def fetch_ca_policies(session, headers: dict) -> list[dict]:
+    return graph_get_all_pages(session, f"{GRAPH_BASE}/identity/conditionalAccess/policies", headers)
+
+
+def fetch_users(session, headers: dict) -> list[dict]:
+    return graph_get_all_pages(
+        session, f"{GRAPH_BASE}/users", headers,
+        params={"$select": "id,displayName,userPrincipalName"},
+    )
+
+
+def fetch_groups(session, headers: dict) -> list[dict]:
+    return graph_get_all_pages(
+        session, f"{GRAPH_BASE}/groups", headers,
+        params={"$select": "id,displayName"},
+    )
+
+
+def fetch_group_members(session, headers: dict, group_id: str) -> list[dict]:
+    return graph_get_all_pages(session, f"{GRAPH_BASE}/groups/{group_id}/members", headers)
+
+
+def fetch_signins_for_user(session, headers: dict, user_principal_name: str, since_iso: str) -> list[dict]:
+    filter_expr = f"userPrincipalName eq '{user_principal_name}' and createdDateTime ge {since_iso}"
+    return graph_get_all_pages(
+        session, f"{GRAPH_BASE}/auditLogs/signIns", headers,
+        params={"$filter": filter_expr},
+    )
+
+
+def fetch_signins_all(session, headers: dict, since_iso: str) -> list[dict]:
+    return graph_get_all_pages(
+        session, f"{GRAPH_BASE}/auditLogs/signIns", headers,
+        params={"$filter": f"createdDateTime ge {since_iso}"},
+    )
