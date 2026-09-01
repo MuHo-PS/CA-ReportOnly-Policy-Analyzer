@@ -56,3 +56,40 @@ class DeviceCodeAuthenticator:
                 f"{result.get('error_description')}"
             )
         return result["access_token"]
+
+
+def request_with_backoff(session, method: str, url: str, max_retries: int = 5, **kwargs) -> "requests.Response":
+    """Issue one HTTP request, retrying on 429 with Retry-After (or a
+    1-second default), raising GraphPermissionError immediately on 403
+    (a caller should record this as "not collected", never retry it away),
+    and GraphThrottledError if 429s exhaust the retry budget.
+    """
+    for attempt in range(max_retries):
+        response = session.request(method, url, **kwargs)
+        if response.status_code == 403:
+            raise GraphPermissionError(f"{method} {url} -> 403: {response.text}")
+        if response.status_code == 429:
+            if attempt == max_retries - 1:
+                break
+            retry_after = float(response.headers.get("Retry-After", 1))
+            time.sleep(retry_after)
+            continue
+        response.raise_for_status()
+        return response
+    raise GraphThrottledError(f"{method} {url} exhausted {max_retries} retries on 429")
+
+
+def graph_get_all_pages(session, url: str, headers: dict, params: dict | None = None) -> list[dict]:
+    """Follow @odata.nextLink until Graph stops returning one, collecting
+    every page's 'value' array into one flat list of plain dicts.
+    """
+    results: list[dict] = []
+    next_url = url
+    next_params = params
+    while next_url:
+        response = request_with_backoff(session, "GET", next_url, headers=headers, params=next_params)
+        body = response.json()
+        results.extend(body.get("value", []))
+        next_url = body.get("@odata.nextLink")
+        next_params = None  # nextLink already carries all needed query params
+    return results
