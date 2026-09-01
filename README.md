@@ -142,3 +142,20 @@ codebase:**
   (which needed a manual text-replace fix in the earlier version). Kept the
   manual `</script>` replace in `ConvertTo-ScriptSafeJson` anyway as
   defense-in-depth, but it's redundant given this native behavior.
+- **The most severe one, caught on the very first real tenant run, not in
+  testing: `Set-StrictMode -Version Latest` throws when a Graph response is
+  simply missing a property, and Graph routinely omits properties instead of
+  setting them null** (e.g. `@odata.nextLink` doesn't exist at all on a
+  single-page response). Because `$nextUri = $resp.Data.'@odata.nextLink'`
+  was a bare assignment with no try/catch around it, the throw (a
+  non-terminating error under the default `$ErrorActionPreference`) meant
+  `$nextUri` simply never got reassigned — the pagination `while` loop's
+  condition stayed true forever and it **re-fetched the exact same Graph page
+  in an unbounded loop**, printing the error every time. Fixed by dropping to
+  `Set-StrictMode -Version 1.0` (still catches uninitialized-variable typos,
+  but doesn't enforce property existence on dynamically-shaped external
+  JSON). `tests/test-pagination.ps1` was added specifically to close this
+  coverage gap — it mocks single-page (no `nextLink`) and multi-page
+  responses and asserts the exact call count, with a safety-valve abort if
+  more than 5 calls happen, so a regression here fails a test instead of
+  hanging in front of a customer again.
