@@ -36,10 +36,23 @@ $policies = @(
 )
 $matrix = @{
     u1 = @{
-        "p-affect"  = @{ notCollected = $false; counts = @{ reportOnlyFailure = 2; reportOnlyNotApplied = 3 }; notEvaluatedCount = 0; totalSignIns = 5; sampleEvents = @() }
-        "p-ready"   = @{ notCollected = $false; counts = @{ reportOnlySuccess = 4 }; notEvaluatedCount = 1; totalSignIns = 5; sampleEvents = @() }
-        "p-none"    = @{ notCollected = $false; counts = @{}; notEvaluatedCount = 5; totalSignIns = 5; sampleEvents = @() }
-        "p-unknown" = @{ notCollected = $false; counts = @{ unknownFutureValue = 1 }; notEvaluatedCount = 4; totalSignIns = 5; sampleEvents = @() }
+        "p-affect"  = @{
+            notCollected = $false
+            counts = @{ reportOnlyFailure = 2; reportOnlyNotApplied = 3 }
+            notEvaluatedCount = 0
+            totalSignIns = 5
+            sampleEvents = @(
+                @{ timestamp = "2026-08-01T09:00:00Z"; app = "Office 365"; location = "Cairo, EG"; deviceCompliant = $false; resultBucket = "reportOnlyFailure" },
+                @{ timestamp = "2026-08-02T09:00:00Z"; app = "Office 365"; location = "Giza, EG"; deviceCompliant = $true; resultBucket = "reportOnlyFailure" }
+            )
+            dailyCounts = @{
+                "2026-08-01" = @{ reportOnlyFailure = 1; reportOnlyNotApplied = 2 }
+                "2026-08-02" = @{ reportOnlyFailure = 1; reportOnlyNotApplied = 1 }
+            }
+        }
+        "p-ready"   = @{ notCollected = $false; counts = @{ reportOnlySuccess = 4 }; notEvaluatedCount = 1; totalSignIns = 5; sampleEvents = @(); dailyCounts = @{} }
+        "p-none"    = @{ notCollected = $false; counts = @{}; notEvaluatedCount = 5; totalSignIns = 5; sampleEvents = @(); dailyCounts = @{} }
+        "p-unknown" = @{ notCollected = $false; counts = @{ unknownFutureValue = 1 }; notEvaluatedCount = 4; totalSignIns = 5; sampleEvents = @(); dailyCounts = @{} }
     }
 }
 $meta = @{ totalSignIns = 20; requestedDays = 7 }
@@ -79,6 +92,19 @@ Check ($domWithoutScript -match 'verdict-ready[\s\S]{0,120}Policy Ready To Enfor
 Check ($domWithoutScript -match 'verdict-none[\s\S]{0,120}Policy With No Signal|Policy With No Signal[\s\S]{0,120}verdict-none') "the no-signal policy renders with the none badge"
 Check ($domWithoutScript -match 'verdict-unknown[\s\S]{0,120}Policy With Unrecognized Result|Policy With Unrecognized Result[\s\S]{0,120}verdict-unknown') "the unknown-result policy renders with the unknown badge"
 Check ($domWithoutScript -notmatch [regex]::Escape('${escapeHtml')) "no unevaluated JS template literal leaked into the rendered DOM"
+
+# --- New charts: donut summary, segmented bars, timeline, impact breakdown ---
+Check ($domWithoutScript -match '<svg[^>]*class="donut-svg"') "the verdict summary donut chart actually rendered as a real SVG element"
+Check ($domWithoutScript -match 'donut-total">4<') "the donut's center total correctly shows all 4 policies"
+Check (([regex]::Matches($domWithoutScript, 'class="segment"')).Count -ge 4) "segmented bars rendered with real colored segments (at least one per non-zero bucket, across cards)"
+Check ($domWithoutScript -match 'timeline-chart') "a daily impact timeline rendered for the policy with real dailyCounts data"
+Check ($domWithoutScript -match '2026-08-01 to 2026-08-02') "the timeline's date range label reflects the real min/max dates in dailyCounts"
+Check ($domWithoutScript -match 'Device compliance: 1 compliant, 1 non-compliant, 0 unknown') "the impact breakdown correctly tallies real sample-event device compliance"
+Check ($domWithoutScript -match 'Cairo, EG \(1\)' -and $domWithoutScript -match 'Giza, EG \(1\)') "the impact breakdown's top-locations list reflects the real sample events"
+# The no-signal and ready policies have empty dailyCounts -- their cards
+# must not render an empty/broken timeline chart at all.
+$noSignalCardMatch = [regex]::Match($domWithoutScript, '(?s)Policy With No Signal.*?(?=verdict-card"|$)')
+Check (-not $noSignalCardMatch.Value.Contains('timeline-chart')) "a policy with empty dailyCounts renders no timeline chart, not a broken empty one"
 
 Remove-Item $tmpHtml, $tmpDump -Force -ErrorAction SilentlyContinue
 

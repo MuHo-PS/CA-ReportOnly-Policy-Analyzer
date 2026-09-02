@@ -47,9 +47,15 @@ Either way:
 ```
 
 Installs the `ps2exe` module if needed and compiles `analyzer.ps1` into
-`ca-report-only-analyzer.exe`. Run this with `powershell.exe` (Windows
-PowerShell 5.1), not `pwsh.exe`, so the compiled binary targets the engine
-every Windows machine has built in by default.
+`ca-report-only-analyzer.exe`, using `app-icon.ico` as the compiled exe's
+icon. Run this with `powershell.exe` (Windows PowerShell 5.1), not
+`pwsh.exe`, so the compiled binary targets the engine every Windows
+machine has built in by default.
+
+The same logo is embedded directly in `analyzer.ps1` as a base64 constant
+(`$Script:AppIconBase64`) and shown in both the picker and report pages —
+kept inline rather than as a loose file so the exe, picker, and report all
+stay fully self-contained with nothing to lose.
 
 ## Running the tests
 
@@ -62,7 +68,7 @@ every Windows machine has built in by default.
 .\tests\test-picker-browser.ps1
 ```
 
-69 tests total, run against real Windows PowerShell (not mocked) — the
+82 tests total, run against real Windows PowerShell (not mocked) — the
 aggregation logic, HTML/JSON generation and escaping, the real transient HTTP
 selection server's GET/POST round trip, Graph pagination (single-page and
 multi-page), and two tests that actually load the generated pages into
@@ -215,3 +221,31 @@ codebase:**
   a bug in the earlier design, and the "Select all" / "Clear" buttons
   added alongside it, both had to be verified this way; reading the code
   is not enough evidence for interactive behavior like this.
+- **A percentage `height` on a flex child only resolves against an
+  ancestor whose own height is already a resolved pixel value.** The daily
+  impact timeline's proportional "impact" sub-bar was built with nested
+  percentage heights (`.timeline-chart` → `.timeline-col` →
+  `.timeline-track` → `.timeline-impact`), and every automated check
+  passed — they only asserted the chart's *presence* and its date-range
+  label, not the rendered proportions. A real screenshot showed the bug
+  immediately: every "impact" bar rendered full-height instead of a
+  sliver proportional to that day's impact fraction. Fixed by computing
+  both the track and impact heights as plain pixel values in JavaScript
+  against one known chart height, then applying them via inline
+  `style="height:Npx"` — sidestepping the ambiguity instead of fighting
+  it. No test currently asserts the pixel values themselves; this class
+  of bug is caught by looking at a real screenshot, not by DOM
+  presence checks, which is why one was taken before shipping.
+- **A JavaScript syntax typo (`#` instead of `//` for a comment) inside an
+  embedded `<script>` block breaks nearly everything downstream of it,
+  silently, in a way that DOM-presence tests report as "not found"
+  rather than "syntax error."** Introduced while writing the fix above;
+  caught by `tests/test-report-browser.ps1` suddenly failing 11 of 14
+  checks. A broad `grep` for stray `#` across the whole file was too
+  noisy to use directly — it also matches legitimate PowerShell-level
+  comments and CSS `#id` selectors, both outside JavaScript entirely — so
+  isolating the search to text between `<script>` and `</script>` tags
+  specifically was what actually located it. (That same narrow search
+  can itself false-positive on a `</script>` appearing inside a *comment
+  describing* the script-tag-injection escaping logic, rather than a
+  real closing tag — worth knowing if this search is reused.)

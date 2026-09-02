@@ -20,11 +20,13 @@ Import-Module ps2exe
 
 $scriptPath = Join-Path $PSScriptRoot "analyzer.ps1"
 $outputPath = Join-Path $PSScriptRoot "ca-report-only-analyzer.exe"
+$iconPath = Join-Path $PSScriptRoot "app-icon.ico"
 
 Write-Host "Compiling $scriptPath -> $outputPath ..."
 Invoke-ps2exe `
     -inputFile $scriptPath `
     -outputFile $outputPath `
+    -iconFile $iconPath `
     -title "CA Report-Only Policy Analyzer" `
     -description "Analyzes which report-only Conditional Access policies would have applied" `
     -company "" `

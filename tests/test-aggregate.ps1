@@ -104,6 +104,34 @@ $totals = Get-PolicyTotals -Matrix $matrix -PolicyId "p1"
 Assert-Equal $totals.notCollectedUsers 1 "one not-collected user counted"
 Assert-Equal $totals.counts["reportOnlySuccess"] 1 "totals sum real counts only"
 
+# --- Get-AggregateCell: dailyCounts (per-day breakdown for the timeline chart) ---
+$dailySignIns = @(
+    (New-TestSignIn -Created "2026-08-01T09:00:00Z" -Policies @([PSCustomObject]@{ id = "p1"; result = "reportOnlySuccess" })),
+    (New-TestSignIn -Created "2026-08-01T15:00:00Z" -Policies @([PSCustomObject]@{ id = "p1"; result = "reportOnlyFailure" })),
+    (New-TestSignIn -Created "2026-08-02T10:00:00Z" -Policies @([PSCustomObject]@{ id = "p1"; result = "reportOnlySuccess" }))
+)
+$dailyCell = Get-AggregateCell -SignIns $dailySignIns -PolicyId "p1"
+Assert-Equal $dailyCell.dailyCounts["2026-08-01"]["reportOnlySuccess"] 1 "day 1 success count correct"
+Assert-Equal $dailyCell.dailyCounts["2026-08-01"]["reportOnlyFailure"] 1 "day 1 failure count correct, same day different bucket"
+Assert-Equal $dailyCell.dailyCounts["2026-08-02"]["reportOnlySuccess"] 1 "day 2 tracked as a separate date key"
+Assert-Equal $dailyCell.dailyCounts.Keys.Count 2 "exactly two distinct dates present"
+
+$missingDateCell = Get-AggregateCell -SignIns @((New-TestSignIn -Created "" -Policies @([PSCustomObject]@{ id = "p1"; result = "reportOnlySuccess" }))) -PolicyId "p1"
+Assert-Equal $missingDateCell.dailyCounts["unknown"]["reportOnlySuccess"] 1 "a missing/malformed date falls back to an 'unknown' bucket instead of throwing"
+
+# --- Get-PolicyTotals: dailyCounts merged across users ---
+$dailyUsers = @(
+    [PSCustomObject]@{ id = "du1"; displayName = "A"; userPrincipalName = "a@contoso.com" },
+    [PSCustomObject]@{ id = "du2"; displayName = "B"; userPrincipalName = "b@contoso.com" }
+)
+$dailySignInsByUser = @{
+    du1 = @((New-TestSignIn -Created "2026-08-01T09:00:00Z" -Policies @([PSCustomObject]@{ id = "p1"; result = "reportOnlyFailure" })))
+    du2 = @((New-TestSignIn -Created "2026-08-01T11:00:00Z" -Policies @([PSCustomObject]@{ id = "p1"; result = "reportOnlyFailure" })))
+}
+$dailyMatrix = Get-UserPolicyMatrix -Users $dailyUsers -Policies $policies -SignInsByUser $dailySignInsByUser -CollectionErrors @{}
+$dailyTotals = Get-PolicyTotals -Matrix $dailyMatrix -PolicyId "p1"
+Assert-Equal $dailyTotals.dailyCounts["2026-08-01"]["reportOnlyFailure"] 2 "dailyCounts sums the same date across both users, not just one"
+
 # --- Resolve-UserScope ---
 $allScope = Resolve-UserScope -Selection @{ all_users = $true; user_ids = @() } -DiscoveredUsers $users
 Assert-Equal $allScope.Count 2 "all_users returns full discovered list"
