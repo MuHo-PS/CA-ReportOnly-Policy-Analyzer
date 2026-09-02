@@ -10,7 +10,22 @@
 
     It never infers or simulates a policy's behavior -- every number in
     the output traces back to a real Graph API evaluation result.
+
+.PARAMETER SignInMethod
+    "Auto" (default) tries device code sign-in first and automatically
+    falls back to interactive browser sign-in if a tenant Conditional
+    Access policy blocks the device code flow -- a policy Microsoft ships
+    as a template and many tenants now enable, which otherwise leaves the
+    device code screen failing with no obvious way forward. Pass
+    "DeviceCode" or "Interactive" to skip the auto-detection and use one
+    method directly (e.g. `.\analyzer.ps1 -SignInMethod Interactive`, or
+    the same flag on the compiled .exe).
 #>
+
+param(
+    [ValidateSet("Auto", "DeviceCode", "Interactive")]
+    [string]$SignInMethod = "Auto"
+)
 
 Set-StrictMode -Version 1.0
 $ProgressPreference = "SilentlyContinue"
@@ -78,6 +93,229 @@ function Get-DeviceCodeToken {
         }
     }
     throw "Device code sign-in timed out after $($flow.expires_in) seconds."
+}
+
+# A tenant Conditional Access policy can block the device code flow
+# specifically (Microsoft ships this as a template policy, and it's
+# increasingly common). The block surfaces only once the user finishes
+# entering the code and signing in in their browser -- the /devicecode
+# request itself always succeeds -- so it's detected here by inspecting
+# the /token polling error, not up front.
+function Test-DeviceCodeBlockedError {
+    param([string]$Message)
+    return $Message -match "(?i)AADSTS53003|conditional access"
+}
+
+# Interactive sign-in via the system browser using the OAuth
+# authorization-code + PKCE flow (RFC 7636) and a loopback HTTP listener
+# to catch the redirect -- the standard approach for public-client desktop
+# apps (this is what MSAL.NET's system-browser flow and the Microsoft
+# Graph PowerShell SDK's interactive Connect-MgGraph do under the hood).
+# No client secret is used or needed; PKCE is what makes a public client
+# safe without one. The redirect URI's registered form for this client is
+# the bare loopback "http://localhost" -- Azure AD matches that against a
+# request carrying any actual port, which is exactly why the listener can
+# pick whatever port happens to be free rather than needing one
+# pre-registered.
+# Pure computation, split out from Get-InteractiveToken specifically so it
+# can be unit tested without a listener or network call: the one thing
+# that must never silently regress here is the challenge actually being
+# derived from the verifier via SHA-256, since a wrong pairing fails
+# closed at the token exchange with an opaque server-side error far away
+# from this code.
+function New-PkceChallenge {
+    $verifierBytes = New-Object byte[] 32
+    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($verifierBytes)
+    $verifier = [Convert]::ToBase64String($verifierBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    $sha256 = [System.Security.Cryptography.SHA256]::Create()
+    $challengeBytes = $sha256.ComputeHash([System.Text.Encoding]::ASCII.GetBytes($verifier))
+    $challenge = [Convert]::ToBase64String($challengeBytes).TrimEnd('=').Replace('+', '-').Replace('/', '_')
+    return @{ Verifier = $verifier; Challenge = $challenge }
+}
+
+# Binds the loopback listener used to catch the OAuth redirect. Split out
+# from Get-InteractiveToken so a test can bind it directly instead of
+# going through a real browser + real tenant sign-in.
+function Start-LoopbackListener {
+    param([Nullable[int]]$FixedPort = $null)
+
+    $listener = New-Object System.Net.HttpListener
+    $port = $null
+    $portsToTry = if ($FixedPort) { @($FixedPort) } else { 8766..8866 }
+    foreach ($candidatePort in $portsToTry) {
+        try {
+            $listener.Prefixes.Clear()
+            $listener.Prefixes.Add("http://localhost:$candidatePort/")
+            $listener.Start()
+            $port = $candidatePort
+            break
+        } catch { continue }
+    }
+    if (-not $port) { throw "Could not bind a local port for interactive sign-in." }
+    return @{ Listener = $listener; Port = $port }
+}
+
+# Blocks until the redirect carrying either ?code=&state= or ?error=
+# arrives, or MaxWaitSeconds elapses. Returns @{ Code = ... } or
+# @{ CallbackError = "... " } -- never throws for a normal OAuth error
+# response, only for a real timeout, so the caller decides how to surface
+# each case. A request whose state doesn't match ExpectedState is treated
+# as a stray hit on the port (e.g. a browser favicon fetch) rather than a
+# valid callback, per OAuth CSRF protection -- it does not resolve the
+# wait either way.
+#
+# Same BeginGetContext/WaitOne/EndGetContext polling pattern as
+# Start-SelectionServer, and for the same reason: BeginGetContext must be
+# called exactly once per connection, polled via WaitOne on that same
+# IAsyncResult, and only re-issued after EndGetContext completes.
+function Wait-ForAuthorizationCode {
+    param(
+        [Parameter(Mandatory)]$Listener,
+        [Parameter(Mandatory)][string]$ExpectedState,
+        [int]$MaxWaitSeconds = 300
+    )
+
+    $code = $null
+    $callbackError = $null
+    $deadline = (Get-Date).AddSeconds($MaxWaitSeconds)
+    $pendingAccept = $Listener.BeginGetContext($null, $null)
+
+    while ($null -eq $code -and $null -eq $callbackError) {
+        if ((Get-Date) -gt $deadline) {
+            throw "Interactive sign-in timed out after $MaxWaitSeconds second(s)."
+        }
+        $gotOne = $pendingAccept.AsyncWaitHandle.WaitOne(500)
+        if (-not $gotOne) { continue }
+
+        $context = $Listener.EndGetContext($pendingAccept)
+        $pendingAccept = $Listener.BeginGetContext($null, $null)
+        $request = $context.Request
+        $response = $context.Response
+
+        $returnedState = $request.QueryString["state"]
+        $returnedCode = $request.QueryString["code"]
+        $returnedError = $request.QueryString["error"]
+        $returnedErrorDesc = $request.QueryString["error_description"]
+
+        if ($returnedError -and $returnedState -eq $ExpectedState) {
+            $callbackError = "$returnedError - $returnedErrorDesc"
+            $responseHtml = "<html><body><h2>Sign-in failed</h2><p>You can close this window and check the terminal.</p></body></html>"
+        } elseif ($returnedCode -and $returnedState -eq $ExpectedState) {
+            $code = $returnedCode
+            $responseHtml = "<html><body><h2>Signed in</h2><p>You can close this window and return to the terminal.</p></body></html>"
+        } else {
+            # A stray request to this port (e.g. the browser fetching a
+            # favicon, or a state that doesn't match) -- respond and keep
+            # waiting for the real callback.
+            $responseHtml = "<html><body></body></html>"
+        }
+
+        $buffer = [System.Text.Encoding]::UTF8.GetBytes($responseHtml)
+        $response.ContentType = "text/html; charset=utf-8"
+        $response.ContentLength64 = $buffer.Length
+        $response.OutputStream.Write($buffer, 0, $buffer.Length)
+        $response.OutputStream.Close()
+    }
+
+    if ($callbackError) { return @{ CallbackError = $callbackError } }
+    return @{ Code = $code }
+}
+
+# Interactive sign-in via the system browser using the OAuth
+# authorization-code + PKCE flow (RFC 7636) and a loopback HTTP listener
+# to catch the redirect -- the standard approach for public-client desktop
+# apps (this is what MSAL.NET's system-browser flow and the Microsoft
+# Graph PowerShell SDK's interactive Connect-MgGraph do under the hood).
+# No client secret is used or needed; PKCE is what makes a public client
+# safe without one. The redirect URI's registered form for this client is
+# the bare loopback "http://localhost" -- Azure AD matches that against a
+# request carrying any actual port, which is exactly why the listener can
+# pick whatever port happens to be free rather than needing one
+# pre-registered.
+function Get-InteractiveToken {
+    $bound = Start-LoopbackListener
+    $listener = $bound.Listener
+    $redirectUri = "http://localhost:$($bound.Port)/"
+
+    $pkce = New-PkceChallenge
+    $state = [Guid]::NewGuid().ToString("N")
+
+    $authParams = [ordered]@{
+        client_id             = $Script:ClientId
+        response_type         = "code"
+        redirect_uri          = $redirectUri
+        response_mode         = "query"
+        scope                 = $Script:Scopes
+        state                 = $state
+        code_challenge        = $pkce.Challenge
+        code_challenge_method = "S256"
+        prompt                = "select_account"
+    }
+    $query = ($authParams.GetEnumerator() | ForEach-Object { "$($_.Key)=$([uri]::EscapeDataString($_.Value))" }) -join "&"
+    $authUrl = "$($Script:AuthorityBase)/authorize?$query"
+
+    Write-Host ""
+    Write-Host "Opening your browser to sign in..." -ForegroundColor Cyan
+    Write-Host "If it doesn't open automatically, go to this URL:" -ForegroundColor Cyan
+    Write-Host $authUrl
+    Write-Host ""
+    try { Start-Process $authUrl | Out-Null } catch {
+        Write-Host "Could not open a browser automatically -- open the URL above manually." -ForegroundColor Yellow
+    }
+
+    try {
+        $result = Wait-ForAuthorizationCode -Listener $listener -ExpectedState $state -MaxWaitSeconds 300
+    } finally {
+        $listener.Stop()
+        $listener.Close()
+    }
+
+    if ($result.CallbackError) { throw "Interactive sign-in failed: $($result.CallbackError)" }
+
+    $tokenBody = @{
+        client_id     = $Script:ClientId
+        scope         = $Script:Scopes
+        code          = $result.Code
+        redirect_uri  = $redirectUri
+        grant_type    = "authorization_code"
+        code_verifier = $pkce.Verifier
+    }
+    try {
+        $result = Invoke-RestMethod -Method Post -Uri "$($Script:AuthorityBase)/token" `
+            -Body $tokenBody -ContentType "application/x-www-form-urlencoded" -ErrorAction Stop
+        return $result.access_token
+    } catch {
+        $errBody = $null
+        if ($_.ErrorDetails.Message) {
+            try { $errBody = $_.ErrorDetails.Message | ConvertFrom-Json } catch { }
+        }
+        if ($errBody) { throw "Interactive sign-in failed exchanging the code: $($errBody.error) - $($errBody.error_description)" }
+        throw
+    }
+}
+
+function Get-AccessToken {
+    param([string]$Method = "Auto")
+
+    if ($Method -eq "Interactive") { return Get-InteractiveToken }
+    if ($Method -eq "DeviceCode") { return Get-DeviceCodeToken }
+
+    # Auto: device code first (works unattended, on any device), but a
+    # growing number of tenants block it outright via Conditional Access,
+    # in which case the sign-in appears to succeed in the browser and then
+    # fails at the very last step with no obvious next action -- so that
+    # specific failure gets a real fallback instead of just an error.
+    try {
+        return Get-DeviceCodeToken
+    } catch {
+        if (Test-DeviceCodeBlockedError -Message $_.Exception.Message) {
+            Write-Host ""
+            Write-Host "Device code sign-in was blocked by a Conditional Access policy in this tenant." -ForegroundColor Yellow
+            Write-Host "Falling back to interactive browser sign-in..." -ForegroundColor Yellow
+            return Get-InteractiveToken
+        }
+        throw
+    }
 }
 
 # ===========================================================================
@@ -1473,13 +1711,15 @@ function Write-ReportHtml {
 function Invoke-CaReportOnlyAnalysis {
     param(
         [string]$OutputPath = "ca-report-only-analysis.html",
-        [switch]$OpenBrowser = $true
+        [switch]$OpenBrowser = $true,
+        [ValidateSet("Auto", "DeviceCode", "Interactive")]
+        [string]$SignInMethod = "Auto"
     )
 
     Write-Host "=== CA Report-Only Policy Analyzer ===" -ForegroundColor Cyan
     Write-Host ""
     Write-Host "Signing in..."
-    $token = Get-DeviceCodeToken
+    $token = Get-AccessToken -Method $SignInMethod
     $headers = @{ Authorization = "Bearer $token" }
     Write-Host "Signed in." -ForegroundColor Green
     Write-Host ""
@@ -1592,5 +1832,5 @@ function Invoke-CaReportOnlyAnalysis {
 # ===========================================================================
 
 if ($MyInvocation.InvocationName -ne ".") {
-    Invoke-CaReportOnlyAnalysis
+    Invoke-CaReportOnlyAnalysis -SignInMethod $SignInMethod
 }

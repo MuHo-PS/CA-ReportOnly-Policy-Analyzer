@@ -27,10 +27,22 @@ needed:
 
 Either way:
 
-1. **Device-code sign-in** — prints a URL + short code. Go to
-   `https://login.microsoft.com/device` in any browser (even your phone), enter
-   the code, sign in with an account that has read rights in the tenant you want
-   to analyze.
+1. **Sign in.** By default this tries device-code sign-in first — prints a URL +
+   short code; go to `https://login.microsoft.com/device` in any browser (even
+   your phone), enter the code, sign in with an account that has read rights in
+   the tenant you want to analyze. **If that tenant blocks the device code flow**
+   (Microsoft ships this as a ready-made Conditional Access policy template, and
+   a growing number of tenants enable it), the sign-in will otherwise appear to
+   go through in the browser and then fail right at the end with no obvious next
+   step — this tool detects that specific failure and automatically falls back to
+   opening a normal interactive browser sign-in window instead, no re-run needed.
+   To skip straight to one method instead of the automatic try-then-fallback,
+   pass `-SignInMethod`:
+   ```powershell
+   .\CA-ReportOnly-Policy-Analyzer.exe -SignInMethod Interactive
+   .\analyzer.ps1 -SignInMethod DeviceCode
+   ```
+   (`Auto` is the default; `DeviceCode` and `Interactive` skip the auto-detection.)
 2. **A selection page opens automatically** — search/multi-select users (or "all
    users"), search/select which **report-only** Conditional Access policies to
    analyze (only report-only ones are ever shown — this tool measures what they
@@ -66,23 +78,35 @@ stay fully self-contained with nothing to lose.
 .\tests\test-pagination.ps1
 .\tests\test-report-browser.ps1
 .\tests\test-picker-browser.ps1
+.\tests\test-interactive-auth.ps1
 ```
 
-82 tests total, run against real Windows PowerShell (not mocked) — the
+97 tests total, run against real Windows PowerShell (not mocked) — the
 aggregation logic, HTML/JSON generation and escaping, the real transient HTTP
 selection server's GET/POST round trip, Graph pagination (single-page and
-multi-page), and two tests that actually load the generated pages into
-headless Microsoft Edge and inspect the real rendered DOM rather than just
-checking the JS source text: `test-report-browser.ps1` (the report) and
-`test-picker-browser.ps1` (the picker — simulates real typing/clicking via
-dispatched DOM events to prove selections survive a search-filter
-re-render). Both skip gracefully if Edge isn't installed.
+multi-page), the PKCE/loopback-listener mechanics behind interactive sign-in,
+and two tests that actually load the generated pages into headless Microsoft
+Edge and inspect the real rendered DOM rather than just checking the JS source
+text: `test-report-browser.ps1` (the report) and `test-picker-browser.ps1`
+(the picker — simulates real typing/clicking via dispatched DOM events to
+prove selections survive a search-filter re-render). Both skip gracefully if
+Edge isn't installed.
+
+`test-interactive-auth.ps1` proves the interactive sign-in *mechanics* — PKCE
+challenge derivation, the loopback listener accepting a real HTTP connection,
+a real OAuth-error callback, and a mismatched `state` being correctly rejected
+— using an in-process background runspace to fire real HTTP requests at the
+listener. It cannot exercise the actual `/authorize` → browser → `/token`
+round trip against a live tenant (same as `Get-DeviceCodeToken`'s live flow
+isn't automated either) — that only gets proven by running it against a real
+tenant once.
 
 ## Required permissions
 
-Requested at sign-in via device code, against Microsoft's own first-party
-"Microsoft Graph Command Line Tools" client — no app registration needed in your
-tenant:
+Requested at sign-in — via device code by default, or interactive browser
+sign-in as a fallback/alternative (see Usage above) — against Microsoft's own
+first-party "Microsoft Graph Command Line Tools" client; no app registration
+needed in your tenant either way:
 
 - `AuditLog.Read.All` — read sign-in logs
 - `Policy.Read.All` — read Conditional Access policies
@@ -249,3 +273,29 @@ codebase:**
   can itself false-positive on a `</script>` appearing inside a *comment
   describing* the script-tag-injection escaping logic, rather than a
   real closing tag — worth knowing if this search is reused.)
+- **Interactive sign-in was added as a fallback for tenants that block the
+  device code flow via Conditional Access** — a policy Microsoft ships as
+  a ready-made template, and one enough real customers now have turned on
+  that it silently broke this tool for them: the device code sign-in
+  *looks* like it's working (the code screen appears, the browser
+  accepts the code) and only fails at the very last step, with no
+  obvious next action for someone who doesn't know what a CA policy is.
+  Implemented as a standard OAuth authorization-code + PKCE flow (RFC
+  7636) against a loopback listener — the same mechanism MSAL.NET's
+  system-browser flow and `Connect-MgGraph`'s default (non-device-code)
+  sign-in use for this exact client. `Get-AccessToken` tries device code
+  first and inspects the failure: if it matches the shape of a real
+  Conditional-Access-block error (`AADSTS53003`, or the phrase
+  "conditional access" generically), it automatically retries via
+  interactive browser sign-in instead of just surfacing the error;
+  `-SignInMethod DeviceCode`/`Interactive` skip the detection entirely.
+  The listener/PKCE/state-matching mechanics are covered by
+  `tests/test-interactive-auth.ps1` using a real HTTP round trip (an
+  in-process background runspace, the same pattern `test-server.ps1`
+  uses for the selection server) — including proving a mismatched
+  `state` is correctly rejected rather than trusted. **What this cannot
+  prove without a live tenant:** whether Azure AD actually accepts the
+  loopback `redirect_uri` for this specific client ID end to end through
+  a real browser round trip. This is standard, well-documented behavior
+  for this exact client, but it is the one part of this feature that
+  only gets confirmed by running it for real once.
