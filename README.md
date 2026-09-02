@@ -12,7 +12,10 @@ on any Windows machine with nothing to install.
 
 ## Usage
 
-**Easiest — run the compiled `.exe`** (built via `build.ps1`, see below):
+**Download and run — nothing to install, nothing to build:**
+
+[**Download `CA-ReportOnly-Policy-Analyzer.exe`**](https://github.com/MuHo-PS/CA-ReportOnly-Policy-Analyzer/releases/latest/download/CA-ReportOnly-Policy-Analyzer.exe)
+(latest release), then just run it:
 
 ```
 .\CA-ReportOnly-Policy-Analyzer.exe
@@ -52,7 +55,11 @@ Either way:
    know it's working, not frozen.
 4. **The report opens automatically** as `ca-report-only-analysis.html`.
 
-## Building the .exe
+## Building the .exe from source
+
+Only needed if you're modifying the tool — most people should use the
+[downloadable release](https://github.com/MuHo-PS/CA-ReportOnly-Policy-Analyzer/releases/latest)
+above instead.
 
 ```powershell
 .\build.ps1
