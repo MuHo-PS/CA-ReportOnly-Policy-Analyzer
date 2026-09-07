@@ -219,11 +219,10 @@ codebase:**
   `&` call operator (`& $edge ... | Out-File ...`) silently produced an empty
   capture in this environment — `Start-Process -RedirectStandardOutput`
   worked reliably where the pipe form didn't.
-- **The report's visual design borrows the real GBG palette** (green
+- **The report's visual design uses a deliberate palette** (green
   `#4FAE7E`, red `#C81E2C`, amber `#E8954A`, blue `#4A90C8` accent, Inter
-  font) from the main GBG Assessment Tool's own report CSS, rather than an
-  invented palette — consistency across the tool family, not a new visual
-  language per report.
+  font) rather than default/invented colors — consistent, readable status
+  coloring across every chart and badge in the report.
 - **`ConvertTo-Json` serializes a ONE-element array as a bare JSON object,
   not a one-element array — but only when that array is the TOP-LEVEL value
   handed to it.** A nested array buried inside a larger object (e.g. a
