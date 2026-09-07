@@ -143,6 +143,12 @@ Assert-Equal $specificScope[0].id "u2" "specific user scope returns the right us
 $unknownIdScope = Resolve-UserScope -Selection @{ all_users = $false; user_ids = @("u2", "not-a-real-id") } -DiscoveredUsers $users
 Assert-Equal $unknownIdScope.Count 1 "a selected id not in discovered_users is silently skipped, never invented"
 
+# --- Get-NextRunOutputPath: repeat runs in one session get distinct files ---
+Assert-Equal (Get-NextRunOutputPath -BasePath "ca-report-only-analysis.html" -RunNumber 1) "ca-report-only-analysis.html" "the first run keeps the exact base filename, unchanged"
+Assert-Equal (Get-NextRunOutputPath -BasePath "ca-report-only-analysis.html" -RunNumber 2) "ca-report-only-analysis-2.html" "the second run in the same session gets its own -2 suffixed file, not overwriting the first"
+Assert-Equal (Get-NextRunOutputPath -BasePath "ca-report-only-analysis.html" -RunNumber 3) "ca-report-only-analysis-3.html" "a third run gets -3, not -2 again"
+Assert-Equal (Get-NextRunOutputPath -BasePath (Join-Path "C:\reports" "out.html") -RunNumber 2) (Join-Path "C:\reports" "out-2.html") "a base path with a directory component keeps that directory on later runs"
+
 Write-Host ""
 Write-Host "$script:passCount passed, $script:failCount failed" -ForegroundColor $(if ($script:failCount -eq 0) { "Green" } else { "Red" })
 if ($script:failCount -gt 0) { exit 1 }

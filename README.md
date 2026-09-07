@@ -54,6 +54,12 @@ Either way:
    take a while on a large tenant/wide date range; the terminal window is how you
    know it's working, not frozen.
 4. **The report opens automatically** as `ca-report-only-analysis.html`.
+5. **Run another analysis?** After each report, the terminal asks
+   `Run another analysis with a new selection? [y/N]`. Answering `y` reopens the
+   selection page for a new set of users/policies/days — without re-signing in
+   or re-discovering policies/users — and writes the next report as
+   `ca-report-only-analysis-2.html`, `-3.html`, and so on, so earlier reports
+   are never overwritten. Pressing Enter (or `n`) exits.
 
 ## Building the .exe from source
 
@@ -86,18 +92,26 @@ stay fully self-contained with nothing to lose.
 .\tests\test-report-browser.ps1
 .\tests\test-picker-browser.ps1
 .\tests\test-interactive-auth.ps1
+.\tests\test-analysis-loop.ps1
 ```
 
-97 tests total, run against real Windows PowerShell (not mocked) — the
+109 tests total, run against real Windows PowerShell (not mocked) — the
 aggregation logic, HTML/JSON generation and escaping, the real transient HTTP
 selection server's GET/POST round trip, Graph pagination (single-page and
 multi-page), the PKCE/loopback-listener mechanics behind interactive sign-in,
-and two tests that actually load the generated pages into headless Microsoft
-Edge and inspect the real rendered DOM rather than just checking the JS source
-text: `test-report-browser.ps1` (the report) and `test-picker-browser.ps1`
-(the picker — simulates real typing/clicking via dispatched DOM events to
-prove selections survive a search-filter re-render). Both skip gracefully if
-Edge isn't installed.
+the "run another analysis" loop's control flow, and two tests that actually
+load the generated pages into headless Microsoft Edge and inspect the real
+rendered DOM rather than just checking the JS source text:
+`test-report-browser.ps1` (the report) and `test-picker-browser.ps1` (the
+picker — simulates real typing/clicking via dispatched DOM events to prove
+selections survive a search-filter re-render). Both skip gracefully if Edge
+isn't installed.
+
+`test-analysis-loop.ps1` mocks sign-in, discovery, the selection page, and
+the actual Graph pull (same function-shadowing technique `test-server.ps1`
+uses for `Start-Process`) to prove the repeat-analysis loop's control flow in
+isolation: it asks again after "y", stops on a blank/"n" answer, and gives
+each run its own output file instead of overwriting the previous one.
 
 `test-interactive-auth.ps1` proves the interactive sign-in *mechanics* — PKCE
 challenge derivation, the loopback listener accepting a real HTTP connection,

@@ -1708,6 +1708,115 @@ function Write-ReportHtml {
 # Main orchestration
 # ===========================================================================
 
+# Each additional run within the same session gets its own file
+# (report-2.html, report-3.html, ...) rather than silently overwriting the
+# previous one before the user has necessarily looked at or saved it.
+function Get-NextRunOutputPath {
+    param([string]$BasePath, [int]$RunNumber)
+    if ($RunNumber -le 1) { return $BasePath }
+    $dir = Split-Path -Path $BasePath -Parent
+    $baseName = [System.IO.Path]::GetFileNameWithoutExtension($BasePath)
+    $ext = [System.IO.Path]::GetExtension($BasePath)
+    $fileName = "$baseName-$RunNumber$ext"
+    if ($dir) { return Join-Path $dir $fileName }
+    return $fileName
+}
+
+# One full selection -> pull -> report cycle, reusing an already-authenticated
+# session's headers and already-discovered policies/users. Split out from
+# Invoke-CaReportOnlyAnalysis specifically so sign-in and discovery happen
+# once per session while this can run repeatedly -- letting someone generate
+# several reports (different user/policy/day-range scopes) in one sitting
+# without re-authenticating or closing and relaunching the tool each time.
+function Invoke-SingleAnalysisRun {
+    param(
+        [Parameter(Mandatory)][hashtable]$Headers,
+        [Parameter(Mandatory)]$Selection,
+        [Parameter(Mandatory)][array]$ReportOnlyPolicies,
+        [Parameter(Mandatory)][array]$DiscoveredUsers,
+        [Parameter(Mandatory)][string]$OutputPath,
+        [bool]$OpenBrowser = $true
+    )
+
+    $scopedUsers = Resolve-UserScope -Selection $Selection -DiscoveredUsers $DiscoveredUsers
+    $selectedPolicyIdSet = @{}
+    foreach ($id in $Selection.policy_ids) { $selectedPolicyIdSet[$id] = $true }
+    $reportPolicies = @($ReportOnlyPolicies | Where-Object { $selectedPolicyIdSet.ContainsKey($_.id) })
+
+    Write-Host "Analyzing $($scopedUsers.Count) user(s) against $($reportPolicies.Count) polic$(if ($reportPolicies.Count -eq 1) { 'y' } else { 'ies' }) over the last $($Selection.days) day(s)."
+    Write-Host ""
+
+    $sinceIso = (Get-Date).ToUniversalTime().AddDays(-$Selection.days).ToString("yyyy-MM-ddTHH:mm:ssZ")
+    $signInsByUser = @{}
+    $collectionErrors = @{}
+
+    if ($Selection.all_users) {
+        Write-Host "Pulling sign-in logs for all users..."
+        $onPage = { param($count) Write-Host "  $count sign-ins pulled so far..." }
+        $allSignInsResp = Get-SignInsAll -Headers $Headers -SinceIso $sinceIso -OnPage $onPage
+        if (-not $allSignInsResp.Success) {
+            $reason = "$($allSignInsResp.Reason): $($allSignInsResp.Message)"
+            Write-Host "  Bulk pull failed ($reason) -- every selected user will be marked not collected." -ForegroundColor Yellow
+            foreach ($user in $scopedUsers) { $collectionErrors[$user.id] = $reason }
+        } else {
+            $upnToUserId = @{}
+            foreach ($user in $scopedUsers) { $upnToUserId[$user.userPrincipalName] = $user.id }
+            foreach ($signIn in $allSignInsResp.Data) {
+                $userId = $upnToUserId[$signIn.userPrincipalName]
+                if ($userId) {
+                    if (-not $signInsByUser.ContainsKey($userId)) { $signInsByUser[$userId] = New-Object System.Collections.ArrayList }
+                    [void]$signInsByUser[$userId].Add($signIn)
+                }
+            }
+            Write-Host "  Done -- $($allSignInsResp.Data.Count) total sign-ins pulled." -ForegroundColor Green
+        }
+    } else {
+        $userIndex = 0
+        foreach ($user in $scopedUsers) {
+            $userIndex++
+            Write-Host "Pulling sign-ins for $($user.displayName) ($userIndex of $($scopedUsers.Count))..."
+            $resp = Get-SignInsForUser -Headers $Headers -UserPrincipalName $user.userPrincipalName -SinceIso $sinceIso
+            if (-not $resp.Success) {
+                $reason = "$($resp.Reason): $($resp.Message)"
+                Write-Host "  Failed ($reason) -- marked not collected." -ForegroundColor Yellow
+                $collectionErrors[$user.id] = $reason
+            } else {
+                $signInsByUser[$user.id] = $resp.Data
+                Write-Host "  $($resp.Data.Count) sign-ins pulled." -ForegroundColor Green
+            }
+        }
+    }
+    Write-Host ""
+
+    Write-Host "Aggregating results..."
+    # PowerShell array-unwrapping gotcha (found by testing, see
+    # Resolve-UserScope): keep this as a real array with 0/1/N elements.
+    $signInsByUserNormalized = @{}
+    foreach ($key in $signInsByUser.Keys) { $signInsByUserNormalized[$key] = @($signInsByUser[$key]) }
+
+    $matrix = Get-UserPolicyMatrix -Users $scopedUsers -Policies $reportPolicies -SignInsByUser $signInsByUserNormalized -CollectionErrors $collectionErrors
+    $totalSignIns = 0
+    foreach ($key in $signInsByUserNormalized.Keys) { $totalSignIns += $signInsByUserNormalized[$key].Count }
+
+    $meta = @{
+        totalSignIns  = $totalSignIns
+        requestedDays = $Selection.days
+    }
+
+    $html = Get-ReportHtml -Matrix $matrix -Users $scopedUsers -Policies $reportPolicies -Meta $meta
+    Write-ReportHtml -Html $html -OutputPath $OutputPath
+
+    Write-Host "Report written to $OutputPath" -ForegroundColor Green
+    if ($OpenBrowser) {
+        $fullPath = (Resolve-Path $OutputPath).Path
+        try { Start-Process $fullPath | Out-Null } catch {
+            Write-Host "Could not open the report automatically -- open it manually: $fullPath" -ForegroundColor Yellow
+        }
+    }
+
+    return $OutputPath
+}
+
 function Invoke-CaReportOnlyAnalysis {
     param(
         [string]$OutputPath = "ca-report-only-analysis.html",
@@ -1739,88 +1848,31 @@ function Invoke-CaReportOnlyAnalysis {
     Write-Host "  $($usersResp.Data.Count) users found."
     Write-Host ""
 
-    Write-Host "Opening the selection page in your browser..." -ForegroundColor Cyan
-    $selection = Start-SelectionServer -Users $usersResp.Data -ReportOnlyPolicies $reportOnlyPolicies
-    Write-Host "Selection received." -ForegroundColor Green
-    Write-Host ""
+    # Sign-in and discovery happen once above; everything below can repeat
+    # for as many analysis runs as the user wants in this session, each
+    # with its own selection and its own output file.
+    $runNumber = 0
+    $lastOutputPath = $null
+    while ($true) {
+        $runNumber++
+        $runOutputPath = Get-NextRunOutputPath -BasePath $OutputPath -RunNumber $runNumber
 
-    $scopedUsers = Resolve-UserScope -Selection $selection -DiscoveredUsers $usersResp.Data
-    $selectedPolicyIdSet = @{}
-    foreach ($id in $selection.policy_ids) { $selectedPolicyIdSet[$id] = $true }
-    $reportPolicies = @($reportOnlyPolicies | Where-Object { $selectedPolicyIdSet.ContainsKey($_.id) })
+        Write-Host "Opening the selection page in your browser..." -ForegroundColor Cyan
+        $selection = Start-SelectionServer -Users $usersResp.Data -ReportOnlyPolicies $reportOnlyPolicies
+        Write-Host "Selection received." -ForegroundColor Green
+        Write-Host ""
 
-    Write-Host "Analyzing $($scopedUsers.Count) user(s) against $($reportPolicies.Count) polic$(if ($reportPolicies.Count -eq 1) { 'y' } else { 'ies' }) over the last $($selection.days) day(s)."
-    Write-Host ""
+        $lastOutputPath = Invoke-SingleAnalysisRun -Headers $headers -Selection $selection `
+            -ReportOnlyPolicies $reportOnlyPolicies -DiscoveredUsers $usersResp.Data `
+            -OutputPath $runOutputPath -OpenBrowser:$OpenBrowser
 
-    $sinceIso = (Get-Date).ToUniversalTime().AddDays(-$selection.days).ToString("yyyy-MM-ddTHH:mm:ssZ")
-    $signInsByUser = @{}
-    $collectionErrors = @{}
-
-    if ($selection.all_users) {
-        Write-Host "Pulling sign-in logs for all users..."
-        $onPage = { param($count) Write-Host "  $count sign-ins pulled so far..." }
-        $allSignInsResp = Get-SignInsAll -Headers $headers -SinceIso $sinceIso -OnPage $onPage
-        if (-not $allSignInsResp.Success) {
-            $reason = "$($allSignInsResp.Reason): $($allSignInsResp.Message)"
-            Write-Host "  Bulk pull failed ($reason) -- every selected user will be marked not collected." -ForegroundColor Yellow
-            foreach ($user in $scopedUsers) { $collectionErrors[$user.id] = $reason }
-        } else {
-            $upnToUserId = @{}
-            foreach ($user in $scopedUsers) { $upnToUserId[$user.userPrincipalName] = $user.id }
-            foreach ($signIn in $allSignInsResp.Data) {
-                $userId = $upnToUserId[$signIn.userPrincipalName]
-                if ($userId) {
-                    if (-not $signInsByUser.ContainsKey($userId)) { $signInsByUser[$userId] = New-Object System.Collections.ArrayList }
-                    [void]$signInsByUser[$userId].Add($signIn)
-                }
-            }
-            Write-Host "  Done -- $($allSignInsResp.Data.Count) total sign-ins pulled." -ForegroundColor Green
-        }
-    } else {
-        $userIndex = 0
-        foreach ($user in $scopedUsers) {
-            $userIndex++
-            Write-Host "Pulling sign-ins for $($user.displayName) ($userIndex of $($scopedUsers.Count))..."
-            $resp = Get-SignInsForUser -Headers $headers -UserPrincipalName $user.userPrincipalName -SinceIso $sinceIso
-            if (-not $resp.Success) {
-                $reason = "$($resp.Reason): $($resp.Message)"
-                Write-Host "  Failed ($reason) -- marked not collected." -ForegroundColor Yellow
-                $collectionErrors[$user.id] = $reason
-            } else {
-                $signInsByUser[$user.id] = $resp.Data
-                Write-Host "  $($resp.Data.Count) sign-ins pulled." -ForegroundColor Green
-            }
-        }
-    }
-    Write-Host ""
-
-    Write-Host "Aggregating results..."
-    # PowerShell array-unwrapping gotcha (found by testing, see
-    # Resolve-UserScope): keep this as a real array with 0/1/N elements.
-    $signInsByUserNormalized = @{}
-    foreach ($key in $signInsByUser.Keys) { $signInsByUserNormalized[$key] = @($signInsByUser[$key]) }
-
-    $matrix = Get-UserPolicyMatrix -Users $scopedUsers -Policies $reportPolicies -SignInsByUser $signInsByUserNormalized -CollectionErrors $collectionErrors
-    $totalSignIns = 0
-    foreach ($key in $signInsByUserNormalized.Keys) { $totalSignIns += $signInsByUserNormalized[$key].Count }
-
-    $meta = @{
-        totalSignIns  = $totalSignIns
-        requestedDays = $selection.days
+        Write-Host ""
+        $again = Read-Host "Run another analysis with a new selection? [y/N]"
+        if ($again -notmatch "^y") { break }
+        Write-Host ""
     }
 
-    $html = Get-ReportHtml -Matrix $matrix -Users $scopedUsers -Policies $reportPolicies -Meta $meta
-    Write-ReportHtml -Html $html -OutputPath $OutputPath
-
-    Write-Host "Report written to $OutputPath" -ForegroundColor Green
-    if ($OpenBrowser) {
-        $fullPath = (Resolve-Path $OutputPath).Path
-        try { Start-Process $fullPath | Out-Null } catch {
-            Write-Host "Could not open the report automatically -- open it manually: $fullPath" -ForegroundColor Yellow
-        }
-    }
-
-    return $OutputPath
+    return $lastOutputPath
 }
 
 # ===========================================================================
