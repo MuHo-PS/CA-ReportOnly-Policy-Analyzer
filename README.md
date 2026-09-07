@@ -10,6 +10,18 @@ evaluation results — it never infers or simulates a policy's behavior.
 Rebuilt in native PowerShell (no Python, no runtime dependencies) so it runs
 on any Windows machine with nothing to install.
 
+## Screenshots
+
+Real output against a real tenant (usernames and one policy name blacked out):
+
+| Sign-in | Selection page |
+|---|---|
+| ![Sign-in](docs/screenshots/terminal-signin.png) | ![Selection page](docs/screenshots/selection-page.png) |
+
+| Report overview | Policy drill-down |
+|---|---|
+| ![Report overview](docs/screenshots/report-overview.png) | ![Policy drill-down](docs/screenshots/report-drilldown.png) |
+
 ## Usage
 
 **Download and run — nothing to install, nothing to build:**
