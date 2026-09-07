@@ -1116,8 +1116,8 @@ $Script:ReportPageStyle = @'
     --bg: #f7f8fa; --card: #ffffff; --border: #e3e6ea;
     --text: #1c2128; --text-muted: #5b6572;
     --accent: #4A90C8; --accent-soft: rgba(74,144,200,0.08);
-    /* Real GBG palette, matched from the main assessment tool's own report
-       CSS -- consistency across the tool family beats a bespoke palette. */
+    /* A deliberate palette rather than default/invented colors -- consistent,
+       readable status coloring across every chart and badge in the report. */
     --ok: #4FAE7E; --ok-soft: rgba(79,174,126,0.12); --ok-border: rgba(79,174,126,0.35);
     --bad: #C81E2C; --bad-soft: rgba(200,30,44,0.12); --bad-border: rgba(200,30,44,0.35);
     --warn: #E8954A; --warn-soft: rgba(232,149,74,0.12); --warn-border: rgba(232,149,74,0.35);
