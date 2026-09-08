@@ -1,5 +1,7 @@
 # CA Report-Only Policy Analyzer
 
+> Disclaimer: This tool is a personal project and is not affiliated with or endorsed by my employer. It is provided "as is," without warranty.
+
 A standalone tool that answers: for a chosen set of users over a chosen time window,
 which Entra ID Conditional Access policies currently in **report-only** mode would
 actually have applied — and to what effect?
